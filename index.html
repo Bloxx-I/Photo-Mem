@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Photo-Mem</title>
+  <meta name="description" content="Gedächtnistraining: Recall-Drill, Leitner-Karteikarten und Blurting.">
+  <meta name="theme-color" content="#14161c">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon.svg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <button class="brand" data-nav="home" aria-label="Start">
+      <img src="icons/icon.svg" alt="" width="28" height="28"> Photo-Mem
+    </button>
+    <div class="streak" id="streak" title="Trainingstage in Folge"></div>
+  </header>
+
+  <main id="view" tabindex="-1"></main>
+
+  <nav class="tabbar" aria-label="Navigation">
+    <button data-nav="home"><span>🏠</span>Start</button>
+    <button data-nav="drill"><span>🎯</span>Drill</button>
+    <button data-nav="leitner"><span>🗂️</span>Leitner</button>
+    <button data-nav="blurt"><span>📝</span>Blurting</button>
+    <button data-nav="stats"><span>📈</span>Statistik</button>
+  </nav>
+
+  <script src="app.js"></script>
+</body>
+</html>
