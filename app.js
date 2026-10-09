@@ -4,12 +4,14 @@
 
 const STORE_KEY = 'photomem:v1';
 
-const defaultData = () => ({ cards: [], texts: [], history: [], drillLevel: 'mittel' });
+const defaultData = () => ({ cards: [], texts: [], history: [], drillLevel: 'mittel', leitnerDeck: 'all', semantic: false });
 
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
-    return raw ? { ...defaultData(), ...JSON.parse(raw) } : defaultData();
+    const d = raw ? { ...defaultData(), ...JSON.parse(raw) } : defaultData();
+    d.cards.forEach((c) => { c.deck ||= 'own'; });
+    return d;
   } catch {
     return defaultData();
   }
@@ -151,7 +153,7 @@ function renderHome() {
       <div class="emoji">🗂️</div>
       <div>
         <h3>2 · Leitner-System ${due ? `<span class="pill">${due} fällig</span>` : ''}</h3>
-        <p class="muted small">Karteikarten in 5 Boxen. Richtig → nächste Box (seltener wiederholen). Falsch → zurück in Box 1.</p>
+        <p class="muted small">Karteikarten in 5 Boxen – mit fertigen Themenpaketen von Weltraum bis Denkfehler. Richtig → nächste Box, falsch → zurück in Box 1.</p>
       </div>
     </button>
 
@@ -159,7 +161,7 @@ function renderHome() {
       <div class="emoji">📝</div>
       <div>
         <h3>3 · Blurting</h3>
-        <p class="muted small">Lesen, schließen, alles auf ein leeres Blatt schreiben – dann prüfen, was du vergessen hast.</p>
+        <p class="muted small">Spannenden Text lesen, schließen, alles aufschreiben oder diktieren – die App prüft, welche Kernaussagen fehlen.</p>
       </div>
     </button>
   `;
@@ -314,32 +316,73 @@ function drillRecall(levelKey, shown, distractors) {
 
 const BOX_INTERVALS = [1, 2, 4, 8, 16]; // days until next review, for boxes 1–5
 const BOX_LABELS = ['täglich', 'alle 2 T.', 'alle 4 T.', 'alle 8 T.', 'alle 16 T.'];
+const NEW_PER_DAY = 6; // a new pack is released gradually instead of all at once
 
-function addCard(front, back) {
+const OWN_DECKS = {
+  own: { emoji: '✍️', title: 'Eigene Karten' },
+  blurt: { emoji: '📝', title: 'Aus Blurting' },
+};
+
+function deckInfo(id) {
+  return DECKS.find((d) => d.id === id) || OWN_DECKS[id] || OWN_DECKS.own;
+}
+
+function addCard(front, back, deck = 'own', due = dayStr()) {
   front = front.trim();
   back = back.trim();
   if (!front || !back) return false;
-  data.cards.push({ id: uid(), front, back, box: 1, due: dayStr() });
+  if (data.cards.some((c) => c.front === front && c.deck === deck)) return false;
+  data.cards.push({ id: uid(), front, back, box: 1, due, deck });
   return true;
 }
 
+function addPack(deck) {
+  shuffle(deck.cards).forEach(([front, back], i) => addCard(front, back, deck.id, addDays(Math.floor(i / NEW_PER_DAY))));
+  save();
+}
+
 function renderLeitner() {
-  const due = dueCards();
-  const counts = [1, 2, 3, 4, 5].map((b) => data.cards.filter((c) => c.box === b).length);
+  const filter = data.leitnerDeck || 'all';
+  const inDeck = (c) => filter === 'all' || c.deck === filter;
+  const cards = data.cards.filter(inDeck);
+  const due = dueCards().filter(inDeck);
+  const counts = [1, 2, 3, 4, 5].map((b) => cards.filter((c) => c.box === b).length);
+  const usedDecks = [...new Set(data.cards.map((c) => c.deck || 'own'))];
 
   view.innerHTML = `
     <h1>🗂️ Leitner-System</h1>
     <p class="muted">Richtig beantwortete Karten wandern eine Box weiter und kommen seltener dran. Falsche fallen zurück in Box 1.</p>
+
+    ${usedDecks.length > 1 ? `
+      <div class="seg" id="filter" style="margin-bottom:4px">
+        <button data-deck="all" class="${filter === 'all' ? 'on' : ''}">Alle</button>
+        ${usedDecks.map((id) => `<button data-deck="${id}" class="${filter === id ? 'on' : ''}">${deckInfo(id).emoji} ${esc(deckInfo(id).title)}</button>`).join('')}
+      </div>` : ''}
 
     <div class="boxes">
       ${counts.map((n, i) => `<div class="box"><small>Box ${i + 1}</small><b>${n}</b><small>${BOX_LABELS[i]}</small></div>`).join('')}
     </div>
 
     <button class="btn primary block" id="learn" ${due.length ? '' : 'disabled'}>
-      ${due.length ? `${due.length} Karte${due.length === 1 ? '' : 'n'} lernen` : 'Heute nichts fällig 🎉'}
+      ${due.length ? `${due.length} Karte${due.length === 1 ? '' : 'n'} lernen` : data.cards.length ? 'Heute nichts fällig 🎉' : 'Wähle unten ein Themenpaket'}
     </button>
 
-    <h2>Neue Karte</h2>
+    <h2>Themenpakete</h2>
+    <p class="muted small">Neue Pakete werden schrittweise freigeschaltet – ${NEW_PER_DAY} neue Karten pro Tag.</p>
+    <div class="card" id="packs">
+      ${DECKS.map((d) => {
+        const n = data.cards.filter((c) => c.deck === d.id).length;
+        return `
+        <div class="list-item">
+          <div class="text"><b>${d.emoji} ${esc(d.title)}</b><br><span class="muted small">${d.cards.length} Karten${n ? ` · ${data.cards.filter((c) => c.deck === d.id && c.box >= 4).length} sitzen schon` : ''}</span></div>
+          ${n
+            ? `<button class="btn ghost small-btn" data-remove="${d.id}">Entfernen</button>`
+            : `<button class="btn primary small-btn" data-add="${d.id}">+ Hinzufügen</button>`}
+        </div>`;
+      }).join('')}
+    </div>
+
+    <h2>Eigene Karte</h2>
     <form class="card stack" id="add">
       <div><label for="front">Vorderseite (Frage)</label><input type="text" id="front" required autocomplete="off"></div>
       <div><label for="back">Rückseite (Antwort)</label><input type="text" id="back" required autocomplete="off"></div>
@@ -354,20 +397,47 @@ function renderLeitner() {
       <button class="btn block" id="import">Importieren</button>
     </details>
 
-    <h2>Alle Karten (${data.cards.length})</h2>
-    <div class="card" id="list">
-      ${data.cards.length ? data.cards.map((c) => `
-        <div class="list-item">
-          <div class="text"><b>${esc(c.front)}</b><br><span class="muted small">${esc(c.back)}</span></div>
-          <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
-            <span class="pill">Box ${c.box}</span>
-            <button class="btn ghost" data-del="${c.id}" aria-label="Karte löschen" style="min-height:32px;padding:4px 10px">✕</button>
-          </div>
-        </div>`).join('') : '<p class="muted center" style="margin:0">Noch keine Karten. Lege oben deine erste an.</p>'}
-    </div>
+    <details class="card">
+      <summary><b>Karten ansehen (${cards.length})</b></summary>
+      <div id="list" style="margin-top:8px">
+        ${cards.length ? cards.map((c) => `
+          <div class="list-item">
+            <div class="text"><b>${esc(c.front)}</b><br><span class="muted small">${esc(c.back)}</span></div>
+            <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+              <span class="pill">Box ${c.box}</span>
+              <button class="btn ghost small-btn" data-del="${c.id}" aria-label="Karte löschen">✕</button>
+            </div>
+          </div>`).join('') : '<p class="muted center" style="margin:0">Keine Karten.</p>'}
+      </div>
+    </details>
   `;
 
   $('#learn').addEventListener('click', () => leitnerSession(shuffle(due)));
+
+  $('#filter')?.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-deck]');
+    if (!b) return;
+    data.leitnerDeck = b.dataset.deck;
+    save();
+    renderLeitner();
+  });
+
+  $('#packs').addEventListener('click', (e) => {
+    const add = e.target.closest('[data-add]');
+    const rem = e.target.closest('[data-remove]');
+    if (add) {
+      const deck = DECKS.find((d) => d.id === add.dataset.add);
+      addPack(deck);
+      toast(`${deck.emoji} ${deck.title} hinzugefügt`);
+      renderLeitner();
+    }
+    if (rem && confirm('Paket samt Lernfortschritt entfernen?')) {
+      data.cards = data.cards.filter((c) => c.deck !== rem.dataset.remove);
+      if (data.leitnerDeck === rem.dataset.remove) data.leitnerDeck = 'all';
+      save();
+      renderLeitner();
+    }
+  });
 
   $('#add').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -406,8 +476,10 @@ function leitnerSession(queue) {
   const show = () => {
     if (i >= queue.length) return finish();
     const c = queue[i];
+    const d = deckInfo(c.deck);
     view.innerHTML = `
       <div class="row between"><h1>Karte ${i + 1}/${queue.length}</h1><span class="pill">Box ${c.box}</span></div>
+      <p class="muted small">${d.emoji} ${esc(d.title)}</p>
       <div class="card flash" id="flash">
         <div>${esc(c.front)}</div>
       </div>
@@ -459,99 +531,80 @@ function leitnerSession(queue) {
 
 /* ---------- 3. Blurting ---------- */
 
-const STOPWORDS = new Set((
-  'aber alle allem allen aller alles also auch auf aus bei beim bin bis bist dann darin darum das dass dein deine dem den denn der des dessen die dies diese diesem diesen dieser dieses doch dort durch eine einem einen einer eines einige euch euer für gegen hatte hatten hier hin hinter ihm ihn ihnen ihr ihre ihrem ihren ihrer ist jede jedem jeden jeder jedes jene jetzt kann kein keine können könnte machen mehr mein meine mich mir mit muss musste nach nicht nichts noch nun nur oder ohne sehr sein seine sich sie sind so solche soll sollte sondern sowie über um und uns unser unter viel vom von vor war waren warum was weil weiter welche wenn wer werden wie wieder will wird wir wurde wurden zum zur zwar zwischen dabei daher damit davon dazu denen deren etwa immer ganz eher statt wobei sowie eines einem wird werden haben habe hat ' +
-  'about after also been before being both could does each from have here into just like many more most much must only other over same should some such than that their them then there these they this those through under very want were what when where which while will with would your yours'
-).split(/\s+/));
+const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-function normalizeWord(w) {
-  w = w.toLowerCase().replace(/ä/g, 'a').replace(/ö/g, 'o').replace(/ü/g, 'u').replace(/ß/g, 'ss');
-  // Rough stemming so "Gedächtnis" and "Gedächtnisses" count as the same word.
-  if (w.length > 5) w = w.replace(/(ern|em|en|er|es|ens|e|n|s)$/, '');
-  return w;
+function blurtTexts() {
+  return [
+    ...TEXTS.map((t) => ({ ...t, key: `b:${t.id}`, builtin: true })),
+    ...data.texts.map((t) => ({ ...t, key: t.id, emoji: '✍️', facts: Recall.autoFacts(t.body) })),
+  ];
 }
 
-function isKeyword(w) {
-  if (/^\d+([.,]\d+)?$/.test(w)) return true;
-  return w.length >= 4 && !STOPWORDS.has(w.toLowerCase());
+function lastBlurt(key) {
+  return data.history.filter((h) => h.mode === 'blurt' && h.detail?.textId === key).pop();
 }
 
-// Exact stem match, or a recalled word inside a compound ("Licht" → "Lichtenergie").
-function wasRecalled(n, recalled) {
-  if (recalled.has(n)) return true;
-  for (const r of recalled) if (r.length >= 5 && n.includes(r)) return true;
-  return false;
-}
-
-function analyzeBlurt(source, attempt) {
-  const recalled = new Set((attempt.match(/[\p{L}\p{N}]+(?:[.,]\d+)?/gu) || []).map(normalizeWord));
-  const keys = new Map(); // normalized -> got?
-  const parts = [];
-  const re = /[\p{L}\p{N}]+(?:[.,]\d+)?/gu;
-  let last = 0;
-  let m;
-  while ((m = re.exec(source))) {
-    parts.push(esc(source.slice(last, m.index)));
-    const w = m[0];
-    if (isKeyword(w)) {
-      const n = normalizeWord(w);
-      const got = wasRecalled(n, recalled);
-      keys.set(n, got);
-      parts.push(`<span class="${got ? 'got' : 'missed'}">${esc(w)}</span>`);
-    } else {
-      parts.push(esc(w));
-    }
-    last = re.lastIndex;
-  }
-  parts.push(esc(source.slice(last)));
-  const total = keys.size;
-  const got = [...keys.values()].filter(Boolean).length;
-  const missed = [...keys.entries()].filter(([, g]) => !g).map(([k]) => k);
-  return { html: parts.join(''), total, got, missed, score: total ? (got / total) * 100 : 0 };
-}
-
-function sentencesWithGaps(source, missed) {
-  const missedSet = new Set(missed);
-  const sentences = source.split(/(?<=[.!?])\s+|\n+/).map((s) => s.trim()).filter(Boolean);
-  const cards = [];
-  for (const s of sentences) {
-    let hasGap = false;
-    const front = s.replace(/[\p{L}\p{N}]+(?:[.,]\d+)?/gu, (w) => {
-      if (isKeyword(w) && missedSet.has(normalizeWord(w))) { hasGap = true; return '____'; }
-      return w;
-    });
-    if (hasGap) cards.push({ front, back: s });
-  }
-  return cards;
+function semanticStatus() {
+  const s = Recall.Semantic;
+  if (!data.semantic) return 'Aus – Abgleich über Wörter, Wortformen, Synonyme und Zahlwörter.';
+  if (s.state === 'ready') return 'Bereit ✓ – läuft lokal auf deinem Gerät.';
+  if (s.state === 'loading') return `Lädt Sprachmodell … ${Math.round(s.progress * 100)}%`;
+  if (s.state === 'error') return '⚠️ Laden fehlgeschlagen (offline?). Es wird nur der Wortabgleich genutzt.';
+  return 'An – beim ersten Prüfen wird einmalig ein Sprachmodell (~120 MB) geladen und danach offline gespeichert.';
 }
 
 function renderBlurt() {
+  const list = blurtTexts();
+  const item = (t) => {
+    const last = lastBlurt(t.key);
+    return `
+      <div class="list-item">
+        <div class="text"><b>${t.emoji} ${esc(t.title)}</b><br><span class="muted small">${t.facts.length} Kernaussagen${last ? ` · zuletzt ${last.score}%` : ''}</span></div>
+        <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
+          <button class="btn primary small-btn" data-start="${t.key}">Start</button>
+          ${t.builtin ? '' : `<button class="btn ghost small-btn" data-del="${t.key}" aria-label="Text löschen">✕</button>`}
+        </div>
+      </div>`;
+  };
+
   view.innerHTML = `
     <h1>📝 Blurting</h1>
-    <p class="muted">Füge einen Lerntext ein. Lies ihn, verdecke ihn und schreibe alles auf, was du noch weißt. Die App zeigt dir, welche Begriffe gefehlt haben.</p>
+    <p class="muted">Lies einen Text, verdecke ihn und schreib oder <b>diktiere</b> alles, was du noch weißt. Die App prüft, welche Kernaussagen du erinnert hast – auch wenn du andere Worte benutzt.</p>
 
-    <h2>Deine Texte</h2>
-    <div class="card" id="texts">
-      ${data.texts.length ? data.texts.map((t) => {
-        const last = data.history.filter((h) => h.mode === 'blurt' && h.detail?.textId === t.id).pop();
-        return `
-        <div class="list-item">
-          <div class="text"><b>${esc(t.title)}</b><br><span class="muted small">${t.body.length} Zeichen${last ? ` · zuletzt ${last.score}%` : ''}</span></div>
-          <div class="row" style="flex-wrap:nowrap;align-items:flex-start">
-            <button class="btn primary" data-start="${t.id}" style="min-height:36px;padding:6px 14px">Start</button>
-            <button class="btn ghost" data-del="${t.id}" aria-label="Text löschen" style="min-height:36px;padding:6px 10px">✕</button>
-          </div>
-        </div>`;
-      }).join('') : '<p class="muted center" style="margin:0">Noch keine Texte.</p>'}
+    <div class="card">
+      <div class="row between" style="flex-wrap:nowrap">
+        <div><h3>🧠 KI-Abgleich</h3><p class="muted small" style="margin:0" id="semStatus">${semanticStatus()}</p></div>
+        <label class="switch" aria-label="KI-Abgleich"><input type="checkbox" id="semToggle" ${data.semantic ? 'checked' : ''}><span></span></label>
+      </div>
+      <p class="muted small" style="margin:8px 0 0">Erkennt Umschreibungen und Sätze mit ganz anderen Worten. Ohne KI-Abgleich klappen Synonyme, Wortformen und Zahlwörter trotzdem.</p>
     </div>
 
-    <h2>Neuer Text</h2>
+    <h2>Themen</h2>
+    <div class="card" id="texts">${list.filter((t) => t.builtin).map(item).join('')}</div>
+
+    <h2>Eigene Texte</h2>
+    <div class="card" id="own">
+      ${list.some((t) => !t.builtin) ? list.filter((t) => !t.builtin).map(item).join('') : '<p class="muted center" style="margin:0">Noch keine eigenen Texte.</p>'}
+    </div>
+
     <form class="card stack" id="add">
+      <h3>Neuer Text</h3>
       <div><label for="title">Titel</label><input type="text" id="title" placeholder="z. B. Photosynthese" required autocomplete="off"></div>
       <div><label for="body">Text</label><textarea id="body" placeholder="Absatz aus Buch, Skript oder Notizen einfügen…" required></textarea></div>
       <button class="btn block" type="submit">Speichern</button>
     </form>
   `;
+
+  const onSem = () => { const el = $('#semStatus'); if (el) el.textContent = semanticStatus(); };
+  Recall.Semantic.listeners.add(onSem);
+  cleanup = () => Recall.Semantic.listeners.delete(onSem);
+
+  $('#semToggle').addEventListener('change', (e) => {
+    data.semantic = e.target.checked;
+    save();
+    onSem();
+    if (data.semantic) Recall.Semantic.load().catch(() => {});
+  });
 
   $('#add').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -564,25 +617,31 @@ function renderBlurt() {
     toast('Text gespeichert');
   });
 
-  $('#texts').addEventListener('click', (e) => {
+  const onListClick = (e) => {
     const s = e.target.closest('[data-start]');
     const d = e.target.closest('[data-del]');
-    if (s) blurtRead(data.texts.find((t) => t.id === s.dataset.start));
+    if (s) return blurtRead(blurtTexts().find((t) => t.key === s.dataset.start));
     if (d && confirm('Diesen Text löschen?')) {
       data.texts = data.texts.filter((t) => t.id !== d.dataset.del);
       save();
       renderBlurt();
     }
-  });
+  };
+  $('#texts').addEventListener('click', onListClick);
+  $('#own').addEventListener('click', onListClick);
 }
 
 function blurtRead(text) {
+  if (cleanup) { cleanup(); cleanup = null; }
+  // Warm up the model while the user is reading.
+  if (data.semantic) Recall.Semantic.load().catch(() => {});
   view.innerHTML = `
     <div class="row between"><h1>Lesen</h1><span class="pill" id="clock">0:00</span></div>
     <p class="muted">Schritt 1/3 – Lies aufmerksam. Danach wird der Text verdeckt.</p>
-    <div class="card"><h3>${esc(text.title)}</h3><div class="source-text">${esc(text.body)}</div></div>
+    <div class="card"><h3>${text.emoji} ${esc(text.title)}</h3><div class="source-text">${esc(text.body)}</div></div>
     <button class="btn primary block" id="hide">Text schließen & aufschreiben</button>
   `;
+  window.scrollTo(0, 0);
   const t0 = Date.now();
   const iv = setInterval(() => {
     const s = Math.floor((Date.now() - t0) / 1000);
@@ -600,46 +659,149 @@ function blurtRead(text) {
 function blurtWrite(text) {
   view.innerHTML = `
     <h1>Leeres Blatt</h1>
-    <p class="muted">Schritt 2/3 – Schreib alles auf, was du über <b>${esc(text.title)}</b> noch weißt. Stichworte reichen.</p>
-    <textarea id="attempt" style="min-height:45dvh" placeholder="Einfach drauflos schreiben…"></textarea>
+    <p class="muted">Schritt 2/3 – Schreib oder diktiere alles, was du über <b>${esc(text.title)}</b> noch weißt. Stichworte reichen, Reihenfolge egal.</p>
+    ${SpeechRec ? `
+      <button class="btn block mic" id="mic" aria-pressed="false">🎤 Diktieren</button>
+      <p class="muted small" id="interim" style="min-height:1.5em;margin:6px 0"></p>`
+    : '<p class="muted small">Tipp: Zum Diktieren das 🎤 auf deiner Handy-Tastatur antippen.</p>'}
+    <textarea id="attempt" style="min-height:40dvh" placeholder="Einfach drauflos …"></textarea>
     <p></p>
     <button class="btn primary block" id="check">Prüfen, was fehlt</button>
   `;
-  $('#attempt').focus();
-  $('#check').addEventListener('click', () => blurtResult(text, $('#attempt').value));
+  const area = $('#attempt');
+  window.scrollTo(0, 0);
+
+  let rec = null;
+  let listening = false;
+  const stop = () => {
+    listening = false;
+    rec?.stop();
+    const mic = $('#mic');
+    if (mic) { mic.textContent = '🎤 Diktieren'; mic.classList.remove('on'); mic.setAttribute('aria-pressed', 'false'); }
+    const interim = $('#interim');
+    if (interim) interim.textContent = '';
+  };
+  cleanup = stop;
+
+  $('#mic')?.addEventListener('click', () => {
+    if (listening) return stop();
+    rec = new SpeechRec();
+    rec.lang = 'de-DE';
+    rec.continuous = true;
+    rec.interimResults = true;
+    rec.onresult = (e) => {
+      let interim = '';
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          const sep = area.value && !/\s$/.test(area.value) ? ' ' : '';
+          area.value += sep + r[0].transcript.trim();
+        } else {
+          interim += r[0].transcript;
+        }
+      }
+      $('#interim').textContent = interim ? `… ${interim}` : '';
+    };
+    rec.onerror = (e) => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+        toast('Mikrofon nicht erlaubt – bitte in den Browser-Einstellungen freigeben');
+        stop();
+      }
+    };
+    // Browsers end recognition after a pause; keep going until the user stops.
+    rec.onend = () => { if (listening) { try { rec.start(); } catch { stop(); } } };
+    try {
+      rec.start();
+      listening = true;
+      const mic = $('#mic');
+      mic.textContent = '⏹ Diktat stoppen';
+      mic.classList.add('on');
+      mic.setAttribute('aria-pressed', 'true');
+    } catch {
+      toast('Spracheingabe konnte nicht gestartet werden');
+    }
+  });
+
+  $('#check').addEventListener('click', () => {
+    stop();
+    cleanup = null;
+    blurtResult(text, area.value);
+  });
 }
 
-function blurtResult(text, attempt) {
-  const r = analyzeBlurt(text.body, attempt);
-  logSession('blurt', r.score, { textId: text.id, got: r.got, total: r.total });
-  const gapCards = sentencesWithGaps(text.body, r.missed);
+const STATUS_UI = {
+  got: { icon: '✓', cls: 'got', label: 'erinnert' },
+  semantic: { icon: '≈', cls: 'got', label: 'sinngemäß erinnert' },
+  partial: { icon: '◐', cls: 'partial', label: 'teilweise' },
+  missed: { icon: '✗', cls: 'missed', label: 'vergessen' },
+};
+
+function gapCard(r) {
+  if (!r.auto) return { front: r.q, back: r.a };
+  const missing = new Set(r.keys.filter((_, i) => !r.hits[i]).map(([w]) => Recall.stem(w)));
+  const front = r.a.replace(/[\p{L}\p{N}]+/gu, (w) => (missing.has(Recall.stem(w)) ? '____' : w));
+  return { front, back: r.a };
+}
+
+async function blurtResult(text, attempt) {
+  const useSemantic = !!data.semantic && attempt.trim().length > 0;
+  view.innerHTML = `
+    <h1>Auswertung</h1>
+    <div class="card center"><p style="margin:0" id="wait">Prüfe deine Antwort …</p></div>
+  `;
+  const onSem = () => { const el = $('#wait'); if (el && Recall.Semantic.state === 'loading') el.textContent = semanticStatus(); };
+  Recall.Semantic.listeners.add(onSem);
+  let res;
+  try {
+    res = await Recall.evaluate(text.facts, attempt, { useSemantic });
+  } finally {
+    Recall.Semantic.listeners.delete(onSem);
+  }
+  if (location.hash.slice(1) !== 'blurt' && location.hash) return; // user navigated away meanwhile
+
+  const { results, score } = res;
+  logSession('blurt', score, { textId: text.key, got: results.filter((r) => r.status !== 'missed').length, total: results.length });
+  const toLearn = results.filter((r) => r.status === 'missed' || r.status === 'partial');
+  const n = (s) => results.filter((r) => r.status === s).length;
 
   view.innerHTML = `
     <h1>Auswertung</h1>
-    <p class="muted">Schritt 3/3 – Das hier hat dein Gehirn noch nicht abgespeichert.</p>
+    <p class="muted">Schritt 3/3 – Das hat dein Gehirn schon gespeichert – und das noch nicht.</p>
     <div class="card">
-      <div class="row between"><b>${r.got} von ${r.total} Schlüsselbegriffen</b><b>${Math.round(r.score)}%</b></div>
+      <div class="row between"><b>${n('got') + n('semantic')} von ${results.length} Kernaussagen</b><b>${Math.round(score)}%</b></div>
       <p></p>
-      <div class="meter"><div style="width:${r.score}%"></div></div>
+      <div class="meter"><div style="width:${score}%"></div></div>
+      ${useSemantic && !res.semanticUsed ? '<p class="muted small" style="margin:8px 0 0">⚠️ KI-Abgleich nicht verfügbar – nur Wortabgleich.</p>' : ''}
     </div>
-    <div class="legend"><span class="l-got">erinnert</span><span class="l-missed">vergessen</span></div>
-    <div class="card"><h3>${esc(text.title)}</h3><div class="source-text">${r.html}</div></div>
+
+    <div class="card facts">
+      ${results.map((r) => {
+        const ui = STATUS_UI[r.status];
+        return `<div class="fact ${ui.cls}"><span class="ficon" title="${ui.label}">${ui.icon}</span><span>${esc(r.a)}${r.status === 'semantic' ? ' <span class="pill">sinngemäß</span>' : ''}</span></div>`;
+      }).join('')}
+    </div>
+    <div class="legend"><span class="l-got">✓ / ≈ erinnert</span><span class="l-partial">◐ teilweise</span><span class="l-missed">✗ vergessen</span></div>
+
+    <details class="card"><summary><b>Originaltext</b></summary><div class="source-text" style="margin-top:8px">${esc(text.body)}</div></details>
     <details class="card"><summary><b>Dein Text</b></summary><div class="source-text" style="margin-top:8px">${esc(attempt) || '<span class="muted">(leer)</span>'}</div></details>
+
     <div class="stack">
-      ${gapCards.length ? `<button class="btn block" id="cards">🗂️ ${gapCards.length} Lückensatz${gapCards.length === 1 ? '' : 'e'} als Leitner-Karte${gapCards.length === 1 ? '' : 'n'} anlegen</button>` : ''}
+      ${toLearn.length ? `<button class="btn block" id="cards">🗂️ ${toLearn.length} Lücke${toLearn.length === 1 ? '' : 'n'} als Leitner-Karte${toLearn.length === 1 ? '' : 'n'} anlegen</button>` : ''}
       <button class="btn primary block" id="again">Nochmal lesen & wiederholen</button>
       <button class="btn ghost block" data-nav="blurt">Zur Übersicht</button>
     </div>
   `;
+  window.scrollTo(0, 0);
 
   $('#again').addEventListener('click', () => blurtRead(text));
   $('#cards')?.addEventListener('click', (e) => {
-    gapCards.forEach((c) => addCard(c.front, c.back));
+    const added = toLearn.map(gapCard).filter((c) => addCard(c.front, c.back, 'blurt')).length;
     save();
     e.target.disabled = true;
-    toast(`${gapCards.length} Karte${gapCards.length === 1 ? '' : 'n'} im Leitner-System angelegt`);
+    toast(added ? `${added} Karte${added === 1 ? '' : 'n'} im Leitner-System angelegt` : 'Diese Karten gibt es schon');
   });
 }
+
 
 /* ---------- Statistik ---------- */
 
@@ -687,8 +849,16 @@ function renderStats() {
       <div class="row">
         <button class="btn" id="export">⬇️ Backup exportieren</button>
         <label class="btn" style="margin:0">⬆️ Backup laden<input type="file" id="importFile" accept="application/json" hidden></label>
-        <button class="btn ghost" id="reset">Alles löschen</button>
+        <button class="btn ghost" id="reset">Fortschritt löschen</button>
       </div>
+    </div>
+
+    <h2>App entfernen</h2>
+    <div class="card stack">
+      <p class="muted small">Löscht alle Daten, den Offline-Speicher und das KI-Sprachmodell von diesem Gerät. Danach kannst du das App-Symbol entfernen:<br>
+      <b>iPhone/Android:</b> Symbol lange drücken → „App entfernen“ / „Deinstallieren“.<br>
+      <b>Chrome/Edge am PC:</b> In der App oben ⋮ → „Photo-Mem deinstallieren“.</p>
+      <button class="btn bad" id="uninstall">🗑️ Alles von diesem Gerät löschen</button>
     </div>
   `;
 
@@ -717,8 +887,24 @@ function renderStats() {
     }
   });
 
+  $('#uninstall').addEventListener('click', async () => {
+    if (!confirm('Wirklich ALLES löschen – Karten, Texte, Statistik, Offline-Daten und Sprachmodell?')) return;
+    try {
+      localStorage.removeItem(STORE_KEY);
+      if ('caches' in window) for (const k of await caches.keys()) await caches.delete(k);
+      if ('serviceWorker' in navigator) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    } catch { /* best effort */ }
+    data = defaultData();
+    view.innerHTML = `
+      <h1>Gelöscht ✅</h1>
+      <p>Alle Daten von Photo-Mem wurden von diesem Gerät entfernt.</p>
+      <p class="muted">Entferne jetzt noch das App-Symbol (lange drücken → Entfernen) oder schließe einfach diesen Tab.</p>
+      <button class="btn" onclick="location.reload()">Doch weiter benutzen</button>`;
+    renderStreak();
+  });
+
   $('#reset').addEventListener('click', () => {
-    if (!confirm('Wirklich alle Karten, Texte und Statistiken löschen?')) return;
+    if (!confirm('Wirklich alle Karten, eigenen Texte und Statistiken löschen?')) return;
     data = defaultData();
     save();
     renderStreak();
