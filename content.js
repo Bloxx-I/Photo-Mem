@@ -186,7 +186,7 @@ const TEXTS = [
       { q: 'Was ist ein Placebo?', a: 'Ein Scheinmedikament ohne Wirkstoff, z. B. eine Zuckerpille.', keys: [['schein', 'zucker', 'ohne wirkstoff', 'kein wirkstoff', 'wirkungslos', 'unwirksam', 'fake', 'attrappe'], ['medikament', 'pille', 'tablette', 'arznei', 'mittel']] },
       { q: 'Was bewirkt ein Placebo?', a: 'Es lindert Beschwerden wie Schmerzen oder Übelkeit.', keys: [['lindert', 'hilft', 'wirkt', 'besser', 'reduziert', 'weniger'], ['schmerz', 'übelkeit', 'beschwerden', 'symptom']] },
       { q: 'Warum wirkt ein Placebo?', a: 'Die Erwartung setzt im Gehirn Botenstoffe wie Endorphine frei.', keys: [['erwartung', 'erwarten', 'glaube', 'glauben', 'einbildung', 'psyche', 'kopf'], ['endorphin', 'botenstoff', 'hormon', 'gehirn', 'körpereigen', 'dopamin']] },
-      { q: 'Wirken teure oder billige Placebos besser?', a: 'Teure Placebos wirken stärker als billige.', keys: [['teuer', 'preis', 'kostspielig'], ['billig', 'günstig', 'stärker', 'besser']] },
+      { q: 'Wirken teure oder billige Placebos besser?', a: 'Teure Placebos wirken stärker als billige.', keys: [['teuer', 'teure', 'preis', 'kostspielig'], ['billig', 'günstig', 'stärker', 'besser', 'mehr']] },
       { q: 'Wirken Spritzen oder Tabletten als Placebo besser?', a: 'Spritzen wirken stärker als Tabletten.', keys: [['spritze', 'injektion']] },
       { q: 'Wirkt ein Placebo, wenn man davon weiß?', a: 'Ja – auch wissentlich genommene Placebos können helfen.', keys: [['wissen', 'wissentlich', 'bewusst', 'offen', 'informiert', 'weiß', 'wissen']] },
       { q: 'Was ist der Nocebo-Effekt?', a: 'Das Gegenteil: Wer Nebenwirkungen erwartet, bekommt sie häufiger.', keys: [['nocebo'], ['nebenwirkung', 'negativ', 'schlechter', 'gegenteil']] },

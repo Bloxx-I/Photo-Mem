@@ -95,42 +95,54 @@ const Recall = (() => {
     return { stems: [...stems], stemSet: stems, syns };
   }
 
-  function levenshtein(a, b, max) {
+  /*
+   * Edit distance where swapping two neighbouring letters costs 1, so German
+   * e-elision ("teuer" → "teure", "dunkel" → "dunkle") and typos like "dsa" pass.
+   */
+  function editDistance(a, b, max) {
     if (Math.abs(a.length - b.length) > max) return max + 1;
+    let prev2 = null;
     let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
     for (let i = 1; i <= a.length; i++) {
       const cur = [i];
       let rowMin = i;
       for (let j = 1; j <= b.length; j++) {
         cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        if (prev2 && i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) cur[j] = Math.min(cur[j], prev2[j - 2] + 1);
         rowMin = Math.min(rowMin, cur[j]);
       }
       if (rowMin > max) return max + 1;
+      prev2 = prev;
       prev = cur;
     }
     return prev[b.length];
   }
 
+  const STRONG = 2;
+  const WEAK = 1;
+
+  /* STRONG = clearly the same word, WEAK = only part of a compound ("Milch" in "Milchstraße"). */
   function wordMatches(altWord, att) {
     const num = parseNumber(fold(altWord));
-    if (num !== null && num > 0) return att.stemSet.has(String(num));
+    if (num !== null && num > 0) return att.stemSet.has(String(num)) ? STRONG : 0;
     const alt = stem(altWord);
-    if (/^\d/.test(alt)) return att.stemSet.has(alt);
-    if (att.stemSet.has(alt)) return true;
+    if (/^\d/.test(alt)) return att.stemSet.has(alt) ? STRONG : 0;
+    if (att.stemSet.has(alt)) return STRONG;
     const altSyns = synIndex.get(alt);
-    if (altSyns) for (const id of altSyns) if (att.syns.has(id)) return true;
+    if (altSyns) for (const id of altSyns) if (att.syns.has(id)) return STRONG;
     const tol = alt.length >= 8 ? 2 : alt.length >= 5 ? 1 : 0;
+    let best = 0;
     for (const t of att.stems) {
-      if (alt.length >= 3 && t.startsWith(alt)) return true; // inflection: "wiederhol" → "wiederholung"
-      if (alt.length >= 5 && t.includes(alt)) return true; // compound: "energie" in "lichtenergie"
-      if (t.length >= 5 && (alt.startsWith(t) || alt.endsWith(t))) return true; // part of a compound: "licht" → "lichtenergie"
-      if (tol && levenshtein(t, alt, tol) <= tol) return true; // typos / dictation slips
+      if (alt.length >= 3 && t.startsWith(alt)) return STRONG; // inflection: "wiederhol" → "wiederholung"
+      if (alt.length >= 5 && t.includes(alt)) return STRONG; // compound: "energie" in "lichtenergie"
+      if (tol && editDistance(t, alt, tol) <= tol) return STRONG; // typos, dictation slips, "teure" ≈ "teuer"
+      if (t.length >= 5 && (alt.startsWith(t) || alt.endsWith(t))) best = WEAK; // "licht" → "lichtenergie"
     }
-    return false;
+    return best;
   }
 
   function altMatches(alt, att) {
-    return words(alt).every((w) => wordMatches(w, att));
+    return Math.min(...words(alt).map((w) => wordMatches(w, att)));
   }
 
   function isKeyword(w) {
@@ -161,10 +173,13 @@ const Recall = (() => {
   function lexical(facts, attempt) {
     const att = analyzeAttempt(attempt);
     return facts.map((f) => {
-      const hits = f.keys.map((group) => group.some((alt) => altMatches(alt, att)));
+      const strength = f.keys.map((group) => Math.max(...group.map((alt) => altMatches(alt, att))));
+      const hits = strength.map(Boolean);
       const matched = hits.filter(Boolean).length;
       const need = Math.max(1, Math.ceil(f.keys.length * (f.auto ? 0.5 : 0.6)));
-      return { ...f, hits, matched, status: matched >= need ? 'got' : matched > 0 ? 'partial' : 'missed' };
+      // Compound-part matches alone are too thin to count a fact as fully recalled.
+      const solid = strength.includes(STRONG);
+      return { ...f, hits, matched, status: matched >= need && solid ? 'got' : matched > 0 ? 'partial' : 'missed' };
     });
   }
 
