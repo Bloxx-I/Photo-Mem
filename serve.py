@@ -16,7 +16,10 @@ import json
 import os
 import re
 import socket
+import ipaddress
+import shutil
 import ssl
+import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -101,8 +104,76 @@ def lan_addresses():
     return sorted(ip for ip in ips if not ip.startswith('127.'))
 
 
+def self_signed_cert(cert_dir):
+    """Create (once) a self-signed certificate for this machine's names and IPs."""
+    cert = os.path.join(cert_dir, 'photo-mem.crt')
+    key = os.path.join(cert_dir, 'photo-mem.key')
+    names = sorted({'localhost', socket.gethostname(), socket.gethostname().split('.')[0] + '.local'})
+    ips = sorted(set(lan_addresses()) | {'127.0.0.1'})
+    san = ','.join([f'DNS:{n}' for n in names] + [f'IP:{ip}' for ip in ips])
+    stamp = os.path.join(cert_dir, 'san.txt')
+    if os.path.exists(cert) and os.path.exists(stamp) and open(stamp).read() == san:
+        return cert, key
+    if not shutil.which('openssl'):
+        return None, None
+    os.makedirs(cert_dir, exist_ok=True)
+    try:
+        subprocess.run(['openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3650',
+                        '-keyout', key, '-out', cert, '-subj', '/CN=Photo-Mem', '-addext', f'subjectAltName={san}'],
+                       check=True, capture_output=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None, None
+    os.chmod(key, 0o600)
+    with open(stamp, 'w') as f:
+        f.write(san)
+    return cert, key
+
+
+class Server(ThreadingHTTPServer):
+    """Speaks HTTPS and HTTP on the same port. Plain HTTP from other devices is
+    redirected to HTTPS, because browsers only allow the microphone there."""
+    ssl_ctx = None
+
+    def finish_request(self, request, client_address):
+        if self.ssl_ctx:
+            try:
+                request.settimeout(10)
+                first = request.recv(1, socket.MSG_PEEK)
+            except OSError:
+                return
+            if first == b'\x16':  # TLS handshake
+                try:
+                    request = self.ssl_ctx.wrap_socket(request, server_side=True)
+                except (ssl.SSLError, OSError):
+                    return  # e.g. the browser rejected the certificate
+            elif not ipaddress.ip_address(client_address[0]).is_loopback:
+                return self.redirect_to_https(request)
+            request.settimeout(None)
+        self.RequestHandlerClass(request, client_address, self)
+
+    def redirect_to_https(self, request):
+        f = request.makefile('rb')
+        line = f.readline(8192).decode('latin-1').split()
+        host = ''
+        while True:
+            h = f.readline(8192)
+            if h in (b'\r\n', b'\n', b''):
+                break
+            k, _, v = h.decode('latin-1').partition(':')
+            if k.strip().lower() == 'host':
+                host = v.strip()
+        path = line[1] if len(line) > 1 else '/'
+        if not host:
+            host = f'{socket.gethostname()}:{self.server_address[1]}'
+        body = f'Bitte https://{host}{path} verwenden.'.encode()
+        request.sendall(
+            f'HTTP/1.1 301 Moved Permanently\r\nLocation: https://{host}{path}\r\n'
+            f'Content-Length: {len(body)}\r\nConnection: close\r\n\r\n'.encode() + body)
+
+
 class Handler(SimpleHTTPRequestHandler):
     upstream = {}
+    tls = False
 
     def log_message(self, fmt, *args):
         if self.path.startswith('/api/'):
@@ -129,7 +200,7 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/api/status':
-            return self.send_json({name: bool(base) for name, base in self.upstream.items()})
+            return self.send_json({**{name: bool(base) for name, base in self.upstream.items()}, 'tls': self.tls})
         if self.path.startswith('/api/'):
             return self.proxy()
         return super().do_GET()
@@ -171,31 +242,45 @@ def main():
                     help="e.g. http://localhost:11434, 'auto' (default) or 'off'")
     ap.add_argument('--whisper', default=os.environ.get('PHOTO_MEM_WHISPER_URL') or 'auto',
                     help="e.g. http://localhost:8000, 'auto' (default) or 'off'")
-    ap.add_argument('--cert', default=os.environ.get('PHOTO_MEM_TLS_CERT', ''))
+    ap.add_argument('--cert', default=os.environ.get('PHOTO_MEM_TLS_CERT', ''), help='own certificate (e.g. tailscale cert)')
     ap.add_argument('--key', default=os.environ.get('PHOTO_MEM_TLS_KEY', ''))
+    ap.add_argument('--tls', default=os.environ.get('PHOTO_MEM_TLS') or 'auto',
+                    help="'auto' (default): self-signed HTTPS when reachable from the network; 'off'")
+    ap.add_argument('--cert-dir', default=os.environ.get('PHOTO_MEM_CERT_DIR') or os.path.join(here, '..', 'tls'))
     ap.add_argument('--dir', default=here)
     args = ap.parse_args()
 
     llm = detect_llm() if args.llm == 'auto' else '' if args.llm == 'off' else args.llm
     whisper = detect_whisper() if args.whisper == 'auto' else '' if args.whisper == 'off' else args.whisper
     Handler.upstream = {'llm': llm, 'whisper': whisper}
-    server = ThreadingHTTPServer((args.bind, args.port), partial(Handler, directory=args.dir))
+    server = Server((args.bind, args.port), partial(Handler, directory=args.dir))
+    lan = args.bind in ('0.0.0.0', '::')
+    cert, key, self_signed = args.cert, args.key, False
+    if not (cert and key) and lan and args.tls != 'off':
+        cert, key = self_signed_cert(os.path.abspath(args.cert_dir))
+        self_signed = bool(cert)
     scheme = 'http'
-    if args.cert and args.key:
+    if cert and key:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain(args.cert, args.key)
-        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+        ctx.load_cert_chain(cert, key)
+        server.ssl_ctx = ctx
+        Handler.tls = True
         scheme = 'https'
 
     def say(msg=''):
         print(msg, file=sys.stderr, flush=True)
 
-    say(f'Photo-Mem läuft:  {scheme}://localhost:{args.port}/')
-    if args.bind in ('0.0.0.0', '::'):
+    say(f'Photo-Mem läuft:  http://localhost:{args.port}/')
+    if lan:
         say('Auf Handy/PC im selben Netz öffnen:')
         for ip in lan_addresses():
             say(f'  {scheme}://{ip}:{args.port}/')
         say(f'  {scheme}://{socket.gethostname().split(".")[0]}.local:{args.port}/   (Name statt IP, klappt meist auch)')
+        if self_signed:
+            say('Beim ersten Öffnen warnt der Browser vor dem Zertifikat (selbst erstellt) –')
+            say('einmal bestätigen ("Erweitert" → "Weiter" / "Website besuchen"). Danach geht das Mikrofon.')
+        elif scheme == 'http':
+            say('Hinweis: ohne HTTPS (openssl fehlt) erlauben Browser kein Mikrofon.')
     else:
         say('Nur auf diesem Gerät erreichbar. Fürs Handy: photo-mem lan')
     say(f'LLM:     {llm or "nicht gefunden"}')

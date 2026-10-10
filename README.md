@@ -113,16 +113,17 @@ Weitere Befehle: `photo-mem local` (nur noch auf dem Server selbst erreichbar), 
 
 Gesucht wird auf den typischen Ports: Ollama `11434`, llama.cpp `8080`, LM Studio `1234`, vLLM `8000`, speaches/faster-whisper `8000`, whisper-asr-webservice `9000`, whisper.cpp `8080`.
 
-**Mikrofon am Handy braucht HTTPS.** Browser erlauben das Mikrofon nur über `https://` oder `localhost`. Am einfachsten mit [Tailscale](https://tailscale.com):
+**Mikrofon & HTTPS:** Browser erlauben das Mikrofon nur über `https://`. Deshalb schaltet `photo-mem lan` automatisch HTTPS mit einem selbst erstellten Zertifikat ein (`http://`-Aufrufe werden umgeleitet). Beim ersten Öffnen warnt der Browser einmal pro Gerät:
 
-```bash
-sudo tailscale cert r9700.dein-tailnet.ts.net
-# in ~/.local/share/photo-mem/config eintragen:
-PHOTO_MEM_TLS_CERT=/pfad/r9700.dein-tailnet.ts.net.crt
-PHOTO_MEM_TLS_KEY=/pfad/r9700.dein-tailnet.ts.net.key
-```
+| Browser | Bestätigen |
+|---|---|
+| Chrome / Edge | „Erweitert“ → „Weiter zu … (unsicher)“ |
+| Safari (Mac, iPhone) | „Details einblenden“ → „Website besuchen“ |
+| Firefox | „Erweitert“ → „Risiko akzeptieren und fortfahren“ |
 
-Dann `https://r9700.dein-tailnet.ts.net:8765` am Handy öffnen und als App installieren. (Alternativ: `tailscale serve --bg 8765`.) Ohne HTTPS funktioniert die Bewertung durchs LLM trotzdem – diktiert wird dann über das 🎤 der Handy-Tastatur.
+Ohne Warnung (und mit Offline-Modus) geht es mit einem echten Zertifikat, z. B. über [Tailscale](https://tailscale.com): `sudo tailscale cert r9700.dein-tailnet.ts.net` und die Pfade als `PHOTO_MEM_TLS_CERT` / `PHOTO_MEM_TLS_KEY` in `photo-mem config` eintragen.
+
+> Die Lerndaten liegen pro Adresse im Browser. Wechselst du von `http://` auf `https://`, nimm deinen Fortschritt mit: alte Adresse → Statistik → Backup exportieren, neue Adresse → Backup laden.
 
 ### Alternativ: Server direkt eintragen
 

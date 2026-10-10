@@ -1,4 +1,4 @@
-const CACHE = 'photo-mem-v4';
+const CACHE = 'photo-mem-v5';
 const ASSETS = ['./', 'index.html', 'styles.css', 'content.js', 'recall.js', 'ai.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg'];
 
 self.addEventListener('install', (e) => {

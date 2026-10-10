@@ -960,16 +960,29 @@ function startSpeech({ onText, onInterim, onEnd }) {
   return kill;
 }
 
+/* Why dictation is unavailable, and what helps. */
+function dictationHint() {
+  const touch = matchMedia('(pointer: coarse)').matches;
+  const system = touch
+    ? 'das 🎤 auf deiner Handy-Tastatur antippen'
+    : /Mac/.test(navigator.platform) ? 'am Mac zweimal die Fn- bzw. 🌐-Taste drücken' : 'unter Windows Win + H drücken';
+  if (!window.isSecureContext) {
+    const https = `https://${location.host}${location.pathname}#blurt`;
+    return `🔒 Der Browser erlaubt das Mikrofon nur über eine sichere Verbindung. <a href="${esc(https)}">Über HTTPS öffnen</a> (Warnung einmal bestätigen) – oder ${system}.`;
+  }
+  return `Dein Browser hat keine eingebaute Spracheingabe (z. B. Firefox). Nutze Chrome, Edge oder Safari, verbinde Whisper unter ⚙️ – oder ${system}.`;
+}
+
 function blurtWrite(text) {
   const whisper = AI.whisperOn();
-  const canDictate = whisper || SpeechRec;
+  const canDictate = window.isSecureContext && (whisper || SpeechRec);
   view.innerHTML = `
     <h1>Leeres Blatt</h1>
     <p class="muted">Schritt 2/3 – Schreib oder diktiere alles, was du über <b>${esc(text.title)}</b> noch weißt. Stichworte reichen, Reihenfolge egal.</p>
     ${canDictate ? `
       <button class="btn block mic" id="mic" aria-pressed="false">🎤 Diktieren${whisper ? ' (Whisper)' : ''}</button>
       <p class="muted small" id="interim" style="min-height:1.5em;margin:6px 0"></p>`
-    : '<p class="muted small">Tipp: Zum Diktieren das 🎤 auf deiner Handy-Tastatur antippen.</p>'}
+    : `<p class="muted small">${dictationHint()}</p>`}
     <textarea id="attempt" style="min-height:40dvh" placeholder="Einfach drauflos …"></textarea>
     <p></p>
     <button class="btn primary block" id="check">Prüfen, was fehlt</button>
