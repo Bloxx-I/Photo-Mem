@@ -29,6 +29,11 @@ Zwei wacklige Runden hintereinander (unter 70 %) gehen ebenfalls eine Stufe runt
 - Optional **🧠 KI-Abgleich**: Ein mehrsprachiges Sprachmodell (~120 MB, einmaliger Download) erkennt auch Sätze mit ganz anderen Worten. Es läuft lokal auf deinem Gerät – deine Texte verlassen es nicht.
 - Vergessene Kernaussagen werden per Klick zu Leitner-Karten.
 
+**Eigener KI-Server (optional):** Mit einem LLM und Whisper auf deinem Rechner (z. B. einer GPU-Workstation) wird Photo-Mem deutlich schlauer – siehe [KI-Server verbinden](#-ki-server-verbinden):
+- das LLM **bewertet Blurting sinngemäß** und gibt kurzes Feedback,
+- es **erzeugt neue Blurting-Texte und Kartenpakete** zu jedem Thema, das dich interessiert,
+- **Whisper transkribiert dein Diktat** – genauer als die Browser-Spracherkennung.
+
 ---
 
 ## 📲 Installation
@@ -74,6 +79,47 @@ python3 -m http.server 8000   # dann http://localhost:8000 öffnen
 
 ---
 
+## 🖥️ KI-Server verbinden
+
+Photo-Mem spricht mit jedem **OpenAI-kompatiblen LLM-Server** (Ollama, llama.cpp `llama-server`, LM Studio, vLLM, LocalAI) und mit **Whisper** (speaches / faster-whisper-server, whisper.cpp `whisper-server`, whisper-asr-webservice). Es werden keine Daten an fremde Dienste geschickt.
+
+### Empfohlen: Photo-Mem direkt auf dem KI-Server starten
+
+So spricht der Browser nur mit einer Adresse – Photo-Mem leitet LLM- und Whisper-Anfragen intern weiter (`serve.py`, nur Python nötig). Dadurch gibt es keine CORS- oder HTTPS-Probleme.
+
+Auf dem Server (Adressen an deine Dienste anpassen):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Bloxx-I/Photo-Mem/HEAD/install.sh | \
+  PHOTO_MEM_LLM_URL=http://localhost:11434 \
+  PHOTO_MEM_WHISPER_URL=http://localhost:8000 \
+  PHOTO_MEM_BIND=0.0.0.0 sh
+photo-mem
+```
+
+Dann im Browser `http://<server-ip>:8765` öffnen – LLM und Whisper werden automatisch erkannt (⚙️ oben rechts zeigt den Status). Einstellungen ändern: `photo-mem config` zeigt die Datei, danach `photo-mem stop && photo-mem`.
+
+Typische Ports: Ollama `11434`, llama.cpp `8080`, LM Studio `1234`, vLLM `8000`, speaches/faster-whisper `8000`, whisper-asr-webservice `9000`, whisper.cpp `8080`.
+
+**Mikrofon am Handy braucht HTTPS.** Browser erlauben das Mikrofon nur über `https://` oder `localhost`. Am einfachsten mit [Tailscale](https://tailscale.com):
+
+```bash
+sudo tailscale cert r9700.dein-tailnet.ts.net
+# in ~/.local/share/photo-mem/config eintragen:
+PHOTO_MEM_TLS_CERT=/pfad/r9700.dein-tailnet.ts.net.crt
+PHOTO_MEM_TLS_KEY=/pfad/r9700.dein-tailnet.ts.net.key
+```
+
+Dann `https://r9700.dein-tailnet.ts.net:8765` am Handy öffnen und als App installieren. (Alternativ: `tailscale serve --bg 8765`.) Ohne HTTPS funktioniert die Bewertung durchs LLM trotzdem – diktiert wird dann über das 🎤 der Handy-Tastatur.
+
+### Alternativ: Server direkt eintragen
+
+In der App ⚙️ → Server-Adresse eingeben → **Server suchen**. Das klappt, wenn
+- die App über `http://` läuft (z. B. lokal mit `photo-mem`) – eine HTTPS-Seite wie GitHub Pages darf keine `http://`-Server im Heimnetz ansprechen, und
+- der Server Anfragen aus dem Browser erlaubt (CORS). Bei Ollama: `OLLAMA_ORIGINS=*` setzen. llama.cpp und whisper.cpp erlauben das standardmäßig.
+
+---
+
 ## 🗑️ Deinstallation
 
 **Lerndaten löschen (alle Varianten):** In der App **Statistik → „Alles von diesem Gerät löschen“**. Das entfernt Karten, Texte, Statistik, den Offline-Speicher und das KI-Modell.
@@ -97,7 +143,7 @@ curl -fsSL https://raw.githubusercontent.com/Bloxx-I/Photo-Mem/HEAD/uninstall.sh
 
 ## Datenschutz
 
-Alles bleibt auf deinem Gerät (`localStorage` im Browser). Es gibt keinen Server und kein Konto. Nur der optionale KI-Abgleich lädt einmalig das Sprachmodell von Hugging Face bzw. jsDelivr; die Auswertung selbst läuft lokal. Backups kannst du unter **Statistik → Backup exportieren** als JSON speichern.
+Alles bleibt auf deinem Gerät (`localStorage` im Browser). Es gibt keinen Server und kein Konto. Nur der optionale KI-Abgleich im Browser lädt einmalig das Sprachmodell von Hugging Face bzw. jsDelivr; die Auswertung selbst läuft lokal. Mit eigenem KI-Server gehen deine Antworten und Sprachaufnahmen nur an diesen Server. Backups kannst du unter **Statistik → Backup exportieren** als JSON speichern.
 
 ## Projektstruktur
 
@@ -106,6 +152,8 @@ Alles bleibt auf deinem Gerät (`localStorage` im Browser). Es gibt keinen Serve
 | `index.html`, `styles.css` | App-Gerüst und Design |
 | `app.js` | Oberfläche, Drill, Leitner, Blurting, Statistik |
 | `content.js` | Themenpakete, Blurting-Texte, Synonyme |
-| `recall.js` | Blurting-Auswertung (Wortabgleich + optionaler KI-Abgleich) |
+| `recall.js` | Blurting-Auswertung (Wortabgleich + optionaler KI-Abgleich im Browser) |
+| `ai.js` | Anbindung an deinen KI-Server (LLM-Bewertung, Themen erzeugen, Whisper) |
+| `serve.py` | Mini-Server: liefert die App aus und leitet `/api/llm` und `/api/whisper` an deine KI-Dienste weiter |
 | `sw.js`, `manifest.webmanifest` | Offline-Fähigkeit und App-Installation |
 | `install.sh`, `uninstall.sh` | Terminal-Installer für macOS/Linux |

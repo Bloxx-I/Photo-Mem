@@ -108,6 +108,7 @@ const routes = {
   leitner: renderLeitner,
   blurt: renderBlurt,
   stats: renderStats,
+  settings: renderSettings,
 };
 
 function navigate(name) {
@@ -117,6 +118,7 @@ function navigate(name) {
 
 function route() {
   if (cleanup) { cleanup(); cleanup = null; }
+  stopMic();
   const name = routes[location.hash.slice(1)] ? location.hash.slice(1) : 'home';
   document.querySelectorAll('.tabbar button').forEach((b) => b.classList.toggle('active', b.dataset.nav === name));
   routes[name]();
@@ -411,8 +413,13 @@ const OWN_DECKS = {
   blurt: { emoji: '📝', title: 'Aus Blurting' },
 };
 
+/* Built-in packs plus packs your KI server generated. */
+function allDecks() {
+  return [...DECKS, ...(data.decks || [])];
+}
+
 function deckInfo(id) {
-  return DECKS.find((d) => d.id === id) || OWN_DECKS[id] || OWN_DECKS.own;
+  return allDecks().find((d) => d.id === id) || OWN_DECKS[id] || OWN_DECKS.own;
 }
 
 function addCard(front, back, deck = 'own', isNew = false) {
@@ -461,7 +468,7 @@ function renderLeitner() {
     <h2>Themenpakete</h2>
     <p class="muted small">Neue Karten kommen schrittweise dazu. Wie viele pro Tag, passt sich deinem Lernerfolg an.</p>
     <div class="card" id="packs">
-      ${DECKS.map((d) => {
+      ${allDecks().map((d) => {
         const n = data.cards.filter((c) => c.deck === d.id).length;
         return `
         <div class="list-item">
@@ -472,6 +479,13 @@ function renderLeitner() {
         </div>`;
       }).join('')}
     </div>
+
+    ${AI.llmOn() ? `
+    <form class="card stack" id="genDeck">
+      <h3>🪄 Neues Paket von deinem KI-Server</h3>
+      <input type="text" id="deckTopic" placeholder="Thema, z. B. Römisches Reich (leer = Überraschung)" autocomplete="off">
+      <button class="btn block" type="submit" id="deckBtn">12 Karten erzeugen</button>
+    </form>` : ''}
 
     <h2>Eigene Karte</h2>
     <form class="card stack" id="add">
@@ -517,16 +531,35 @@ function renderLeitner() {
     const add = e.target.closest('[data-add]');
     const rem = e.target.closest('[data-remove]');
     if (add) {
-      const deck = DECKS.find((d) => d.id === add.dataset.add);
+      const deck = allDecks().find((d) => d.id === add.dataset.add);
       addPack(deck);
       toast(`${deck.emoji} ${deck.title} hinzugefügt`);
       renderLeitner();
     }
     if (rem && confirm('Paket samt Lernfortschritt entfernen?')) {
       data.cards = data.cards.filter((c) => c.deck !== rem.dataset.remove);
+      data.decks = (data.decks || []).filter((d) => d.id !== rem.dataset.remove);
       if (data.leitnerDeck === rem.dataset.remove) data.leitnerDeck = 'all';
       save();
       renderLeitner();
+    }
+  });
+
+  $('#genDeck')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#deckBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Dein Server erstellt Karten …';
+    try {
+      const d = await AI.generateDeck($('#deckTopic').value.trim(), allDecks().map((x) => x.title));
+      const deck = { id: `ai:${uid()}`, ...d };
+      (data.decks ||= []).push(deck);
+      addPack(deck);
+      toast(`${deck.emoji} ${deck.title}: ${deck.cards.length} Karten`);
+      if (location.hash.slice(1) === 'leitner') renderLeitner();
+    } catch (err) {
+      toast(`Fehler: ${AI.explain(err, AI.cfg().llmUrl)}`);
+      if (btn.isConnected) { btn.disabled = false; btn.textContent = '12 Karten erzeugen'; }
     }
   });
 
@@ -643,7 +676,7 @@ const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 function blurtTexts() {
   return [
     ...TEXTS.map((t) => ({ ...t, key: `b:${t.id}`, builtin: true })),
-    ...data.texts.map((t) => ({ ...t, key: t.id, emoji: '✍️', facts: Recall.autoFacts(t.body) })),
+    ...data.texts.map((t) => ({ ...t, key: t.id, emoji: t.emoji || '✍️', facts: t.facts || Recall.autoFacts(t.body) })),
   ];
 }
 
@@ -712,13 +745,25 @@ function renderBlurt() {
       <div><h3>Dein Level</h3><p class="muted small" style="margin:0">${blurtLevelText()} Ab 85 % wird es schwerer, unter 50 % leichter.</p></div>
     </div>
 
+    ${AI.llmOn() ? `
+    <div class="card">
+      <div class="row between" style="flex-wrap:nowrap">
+        <div><h3>🖥️ KI-Server aktiv</h3><p class="muted small" style="margin:0">${esc(AI.cfg().llmModel)} bewertet deine Antworten sinngemäß${AI.whisperOn() ? ' · Diktat über Whisper' : ''}.</p></div>
+        <button class="btn ghost small-btn" data-nav="settings">⚙️</button>
+      </div>
+    </div>
+    <form class="card stack" id="gen">
+      <h3>🪄 Neues Thema erzeugen</h3>
+      <input type="text" id="genTopic" placeholder="Thema (leer = Überraschung)" autocomplete="off">
+      <button class="btn block" type="submit" id="genBtn">Text erzeugen</button>
+    </form>` : `
     <div class="card">
       <div class="row between" style="flex-wrap:nowrap">
         <div><h3>🧠 KI-Abgleich</h3><p class="muted small" style="margin:0" id="semStatus">${semanticStatus()}</p></div>
         <label class="switch" aria-label="KI-Abgleich"><input type="checkbox" id="semToggle" ${data.semantic ? 'checked' : ''}><span></span></label>
       </div>
-      <p class="muted small" style="margin:8px 0 0">Erkennt Umschreibungen und Sätze mit ganz anderen Worten. Ohne KI-Abgleich klappen Synonyme, Wortformen und Zahlwörter trotzdem.</p>
-    </div>
+      <p class="muted small" style="margin:8px 0 0">Erkennt Umschreibungen und Sätze mit ganz anderen Worten. Ohne KI-Abgleich klappen Synonyme, Wortformen und Zahlwörter trotzdem. Eigener KI-Server? <a href="#settings">Hier verbinden</a>.</p>
+    </div>`}
 
     <h2>Themen</h2>
     <div class="card" id="texts">${list.filter((t) => t.builtin).map(item).join('')}</div>
@@ -740,7 +785,26 @@ function renderBlurt() {
   Recall.Semantic.listeners.add(onSem);
   cleanup = () => Recall.Semantic.listeners.delete(onSem);
 
-  $('#semToggle').addEventListener('change', (e) => {
+  $('#gen')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = $('#genBtn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Dein Server schreibt …';
+    try {
+      const t = await AI.generateText($('#genTopic').value.trim(), blurtTexts().map((x) => x.title));
+      const item = { id: uid(), ...t, ai: true, created: new Date().toISOString() };
+      data.texts.push(item);
+      save();
+      if (location.hash.slice(1) !== 'blurt') return;
+      toast(`${t.emoji} ${t.title} erstellt`);
+      blurtRead(blurtTexts().find((x) => x.key === item.id));
+    } catch (err) {
+      toast(`Fehler: ${AI.explain(err, AI.cfg().llmUrl)}`);
+      if (btn.isConnected) { btn.disabled = false; btn.textContent = 'Text erzeugen'; }
+    }
+  });
+
+  $('#semToggle')?.addEventListener('change', (e) => {
     data.semantic = e.target.checked;
     save();
     onSem();
@@ -831,12 +895,79 @@ function blurtPause(text, seconds) {
   cleanup = () => clearInterval(iv);
 }
 
+/* ---- Dictation ---- */
+
+/*
+ * Only one microphone session exists at a time. It is always switched off when
+ * the user stops it, checks the answer, leaves the page or the app goes to the
+ * background – browsers otherwise keep the mic open.
+ */
+let micOff = null;
+
+function stopMic() {
+  const off = micOff;
+  micOff = null;
+  return off ? off() : Promise.resolve();
+}
+
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopMic(); });
+window.addEventListener('pagehide', () => stopMic());
+
+/* Browser speech recognition (Chrome, Edge, Safari). Returns a function that kills it. */
+function startSpeech({ onText, onInterim, onEnd }) {
+  const rec = new SpeechRec();
+  let active = true;
+  let idle;
+  rec.lang = 'de-DE';
+  rec.continuous = true;
+  rec.interimResults = true;
+
+  const kill = () => {
+    if (!active) return;
+    active = false;
+    clearTimeout(idle);
+    rec.onresult = rec.onend = rec.onerror = null;
+    try { rec.abort(); } catch { /* already ended */ }
+    onEnd();
+  };
+  // Safety net: switch off after a long silence even if the user forgets.
+  const armIdle = () => { clearTimeout(idle); idle = setTimeout(() => { toast('Diktat nach 45 s Stille beendet'); kill(); }, 45000); };
+
+  rec.onresult = (e) => {
+    if (!active) return;
+    armIdle();
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const r = e.results[i];
+      if (r.isFinal) onText(r[0].transcript.trim());
+      else interim += r[0].transcript;
+    }
+    onInterim(interim);
+  };
+  rec.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed' || e.error === 'audio-capture') {
+      toast('Mikrofon nicht verfügbar – bitte im Browser freigeben');
+      kill();
+    }
+  };
+  // Browsers end recognition after a pause; restart only while still active.
+  rec.onend = () => {
+    if (!active) return;
+    try { rec.start(); } catch { kill(); }
+  };
+  rec.start();
+  armIdle();
+  return kill;
+}
+
 function blurtWrite(text) {
+  const whisper = AI.whisperOn();
+  const canDictate = whisper || SpeechRec;
   view.innerHTML = `
     <h1>Leeres Blatt</h1>
     <p class="muted">Schritt 2/3 – Schreib oder diktiere alles, was du über <b>${esc(text.title)}</b> noch weißt. Stichworte reichen, Reihenfolge egal.</p>
-    ${SpeechRec ? `
-      <button class="btn block mic" id="mic" aria-pressed="false">🎤 Diktieren</button>
+    ${canDictate ? `
+      <button class="btn block mic" id="mic" aria-pressed="false">🎤 Diktieren${whisper ? ' (Whisper)' : ''}</button>
       <p class="muted small" id="interim" style="min-height:1.5em;margin:6px 0"></p>`
     : '<p class="muted small">Tipp: Zum Diktieren das 🎤 auf deiner Handy-Tastatur antippen.</p>'}
     <textarea id="attempt" style="min-height:40dvh" placeholder="Einfach drauflos …"></textarea>
@@ -844,61 +975,67 @@ function blurtWrite(text) {
     <button class="btn primary block" id="check">Prüfen, was fehlt</button>
   `;
   const area = $('#attempt');
+  const mic = $('#mic');
+  const interim = $('#interim');
   window.scrollTo(0, 0);
 
-  let rec = null;
-  let listening = false;
-  const stop = () => {
-    listening = false;
-    rec?.stop();
-    const mic = $('#mic');
-    if (mic) { mic.textContent = '🎤 Diktieren'; mic.classList.remove('on'); mic.setAttribute('aria-pressed', 'false'); }
-    const interim = $('#interim');
-    if (interim) interim.textContent = '';
+  const append = (t) => {
+    if (!t) return;
+    area.value += (area.value && !/\s$/.test(area.value) ? ' ' : '') + t;
   };
-  cleanup = stop;
+  const setMic = (state) => {
+    if (!mic) return;
+    mic.disabled = state === 'busy';
+    mic.classList.toggle('on', state === 'on');
+    mic.setAttribute('aria-pressed', String(state === 'on'));
+    mic.textContent = state === 'on' ? '⏹ Diktat stoppen' : state === 'busy' ? '⏳ Transkribiere …' : `🎤 Diktieren${whisper ? ' (Whisper)' : ''}`;
+    if (state !== 'on' && interim) interim.textContent = '';
+  };
 
-  $('#mic')?.addEventListener('click', () => {
-    if (listening) return stop();
-    rec = new SpeechRec();
-    rec.lang = 'de-DE';
-    rec.continuous = true;
-    rec.interimResults = true;
-    rec.onresult = (e) => {
-      let interim = '';
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const r = e.results[i];
-        if (r.isFinal) {
-          const sep = area.value && !/\s$/.test(area.value) ? ' ' : '';
-          area.value += sep + r[0].transcript.trim();
-        } else {
-          interim += r[0].transcript;
-        }
-      }
-      $('#interim').textContent = interim ? `… ${interim}` : '';
-    };
-    rec.onerror = (e) => {
-      if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-        toast('Mikrofon nicht erlaubt – bitte in den Browser-Einstellungen freigeben');
-        stop();
-      }
-    };
-    // Browsers end recognition after a pause; keep going until the user stops.
-    rec.onend = () => { if (listening) { try { rec.start(); } catch { stop(); } } };
+  const startWhisper = async () => {
+    const r = AI.recorder();
     try {
-      rec.start();
-      listening = true;
-      const mic = $('#mic');
-      mic.textContent = '⏹ Diktat stoppen';
-      mic.classList.add('on');
-      mic.setAttribute('aria-pressed', 'true');
+      await r.start();
+    } catch (err) {
+      toast(err.message || 'Mikrofon nicht verfügbar');
+      return;
+    }
+    setMic('on');
+    interim.textContent = '● Aufnahme läuft – zum Beenden nochmal tippen';
+    micOff = async () => {
+      setMic('busy');
+      try {
+        append(await r.stop());
+      } catch (err) {
+        toast(`Whisper: ${AI.explain(err, AI.cfg().whisperUrl)}`);
+      } finally {
+        setMic('off');
+      }
+    };
+  };
+
+  mic?.addEventListener('click', () => {
+    if (micOff) return stopMic();
+    if (whisper) return startWhisper();
+    try {
+      micOff = startSpeech({
+        onText: append,
+        onInterim: (t) => { if (interim) interim.textContent = t ? `… ${t}` : ''; },
+        onEnd: () => { micOff = null; setMic('off'); },
+      });
+      setMic('on');
     } catch {
+      micOff = null;
       toast('Spracheingabe konnte nicht gestartet werden');
     }
   });
 
-  $('#check').addEventListener('click', () => {
-    stop();
+  // Leaving the page switches the mic off (pending Whisper audio is transcribed but discarded).
+  cleanup = () => { stopMic(); };
+
+  $('#check').addEventListener('click', async () => {
+    $('#check').disabled = true;
+    await stopMic(); // finishes a running Whisper recording first
     cleanup = null;
     blurtResult(text, area.value);
   });
@@ -919,16 +1056,32 @@ function gapCard(r) {
 }
 
 async function blurtResult(text, attempt) {
-  const useSemantic = !!data.semantic && attempt.trim().length > 0;
+  const useLlm = AI.llmOn() && attempt.trim().length > 0;
+  const useSemantic = !useLlm && !!data.semantic && attempt.trim().length > 0;
   view.innerHTML = `
     <h1>Auswertung</h1>
-    <div class="card center"><p style="margin:0" id="wait">Prüfe deine Antwort …</p></div>
+    <div class="card center"><p style="margin:0" id="wait">${useLlm ? '🖥️ Dein KI-Server prüft deine Antwort …' : 'Prüfe deine Antwort …'}</p></div>
   `;
   const onSem = () => { const el = $('#wait'); if (el && Recall.Semantic.state === 'loading') el.textContent = semanticStatus(); };
   Recall.Semantic.listeners.add(onSem);
   let res;
   try {
     res = await Recall.evaluate(text.facts, attempt, { useSemantic });
+    if (useLlm) {
+      try {
+        const g = await AI.grade(text.facts, attempt);
+        res.results.forEach((r, i) => {
+          const s = g.statuses[i];
+          if (!s) return;
+          r.status = s === 'got' && r.status !== 'got' ? 'semantic' : s;
+        });
+        res.score = Recall.scoreOf(res.results);
+        res.feedback = g.feedback;
+        res.llmUsed = true;
+      } catch (err) {
+        res.llmError = AI.explain(err, AI.cfg().llmUrl);
+      }
+    }
   } finally {
     Recall.Semantic.listeners.delete(onSem);
   }
@@ -953,7 +1106,9 @@ async function blurtResult(text, attempt) {
       <p></p>
       <div class="meter"><div style="width:${score}%"></div></div>
       ${useSemantic && !res.semanticUsed ? '<p class="muted small" style="margin:8px 0 0">⚠️ KI-Abgleich nicht verfügbar – nur Wortabgleich.</p>' : ''}
+      ${res.llmError ? `<p class="muted small" style="margin:8px 0 0">⚠️ KI-Server nicht erreichbar – nur Wortabgleich. (${esc(res.llmError)})</p>` : ''}
     </div>
+    ${res.feedback ? `<div class="card"><h3>🖥️ Feedback</h3><p style="margin:0">${esc(res.feedback)}</p></div>` : ''}
     ${banner}
 
     <div class="card facts">
@@ -1096,10 +1251,105 @@ function renderStats() {
   });
 }
 
+/* ---------- Einstellungen: KI-Server ---------- */
+
+function renderSettings() {
+  const c = AI.cfg();
+  view.innerHTML = `
+    <h1>⚙️ KI-Server</h1>
+    <p class="muted">Verbinde Photo-Mem mit deinem eigenen Server: ein LLM bewertet Blurting sinngemäß und erzeugt neue Themen, Whisper transkribiert dein Diktat.</p>
+
+    <form class="card stack" id="scan">
+      <div><label for="host">Server-Adresse</label>
+      <input type="text" id="host" placeholder="z. B. 192.168.178.50 oder r9700.local" autocomplete="off" value="${esc(data.aiHost || '')}"></div>
+      <button class="btn primary block" type="submit">🔍 Server suchen</button>
+      <p class="muted small" style="margin:0">Sucht nach Ollama, llama.cpp, LM Studio, vLLM und Whisper auf den üblichen Ports. Läuft die App über <code>serve.py</code> auf dem Server, wird alles automatisch gefunden.</p>
+      <div id="log" class="small"></div>
+    </form>
+
+    <div class="card stack">
+      <h3>🧠 LLM</h3>
+      <div><label for="llmUrl">Adresse</label><input type="text" id="llmUrl" value="${esc(c.llmUrl)}" placeholder="http://192.168.178.50:11434" autocomplete="off"></div>
+      <div><label for="llmModel">Modell</label><select id="llmModel"><option>${esc(c.llmModel || '–')}</option></select></div>
+      <label class="row" style="font-weight:normal"><input type="checkbox" id="useLlm" ${c.useLlm ? 'checked' : ''}> Blurting damit bewerten & Themen erzeugen</label>
+      <p class="small" id="llmStatus"></p>
+    </div>
+
+    <div class="card stack">
+      <h3>🎤 Whisper</h3>
+      <div><label for="whisperUrl">Adresse</label><input type="text" id="whisperUrl" value="${esc(c.whisperUrl)}" placeholder="http://192.168.178.50:8000" autocomplete="off"></div>
+      <div><label for="whisperType">Server-Typ</label>
+        <select id="whisperType">
+          <option value="">automatisch erkennen</option>
+          <option value="openai" ${c.whisperType === 'openai' ? 'selected' : ''}>OpenAI-kompatibel (speaches, faster-whisper-server, LocalAI)</option>
+          <option value="whispercpp" ${c.whisperType === 'whispercpp' ? 'selected' : ''}>whisper.cpp server</option>
+          <option value="asr" ${c.whisperType === 'asr' ? 'selected' : ''}>whisper-asr-webservice</option>
+        </select></div>
+      <label class="row" style="font-weight:normal"><input type="checkbox" id="useWhisper" ${c.useWhisper ? 'checked' : ''}> Diktat über Whisper statt Browser</label>
+      <p class="small" id="whisperStatus"></p>
+    </div>
+
+    <button class="btn block" id="test">Verbindung testen</button>
+    <p class="muted small">Klappt die Verbindung nicht? Meist blockiert der Browser HTTP-Server von einer HTTPS-Seite aus oder der Server erlaubt kein CORS. Die einfachste Lösung: Photo-Mem direkt auf dem Server mit <code>serve.py</code> starten – siehe README.</p>
+  `;
+
+  const show = async () => {
+    $('#llmStatus').textContent = c.llmUrl ? 'Prüfe …' : 'Nicht eingerichtet';
+    $('#whisperStatus').textContent = c.whisperUrl ? 'Prüfe …' : 'Nicht eingerichtet';
+    const st = await AI.check();
+    if (!$('#llmStatus')) return;
+    if (st.llm) {
+      $('#llmStatus').textContent = st.llm.ok ? `✓ Verbunden – ${st.llm.models.length} Modelle` : `✗ ${st.llm.error}`;
+      if (st.llm.ok) {
+        $('#llmModel').innerHTML = st.llm.models.map((m) => `<option ${m === c.llmModel ? 'selected' : ''}>${esc(m)}</option>`).join('');
+        if (!st.llm.models.includes(c.llmModel)) { c.llmModel = st.llm.models[0] || ''; save(); }
+      }
+    }
+    if (st.whisper) $('#whisperStatus').textContent = st.whisper.ok ? `✓ Verbunden (${st.whisper.type})` : `✗ ${st.whisper.error}`;
+  };
+
+  const field = (id, key, transform = (v) => v) => $(id).addEventListener('change', (e) => {
+    c[key] = transform(e.target.type === 'checkbox' ? e.target.checked : e.target.value);
+    save();
+    if (key.endsWith('Url') || key === 'whisperType') show();
+  });
+  const url = (v) => v.trim().replace(/\/+$/, '').replace(/\/v1$/, '');
+  field('#llmUrl', 'llmUrl', url);
+  field('#llmModel', 'llmModel');
+  field('#useLlm', 'useLlm');
+  field('#whisperUrl', 'whisperUrl', url);
+  field('#whisperType', 'whisperType');
+  field('#useWhisper', 'useWhisper');
+
+  $('#scan').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    data.aiHost = $('#host').value.trim();
+    save();
+    const log = $('#log');
+    log.textContent = 'Suche …';
+    const lines = [];
+    const found = await AI.discover(data.aiHost, (l) => { lines.push(l); log.textContent = lines.join('\n'); });
+    if (!$('#log')) return;
+    if (!found.llm) lines.push('✗ Kein LLM gefunden');
+    if (!found.whisper) lines.push('✗ Kein Whisper gefunden');
+    renderSettings();
+    $('#log').style.whiteSpace = 'pre-line';
+    $('#log').textContent = lines.join('\n');
+  });
+  $('#test').addEventListener('click', show);
+  show();
+}
+
 /* ---------- Start ---------- */
 
 renderStreak();
 route();
+
+// Served by serve.py on your AI server? Then connect automatically.
+AI.detectProxy().then((p) => {
+  const c = AI.cfg();
+  if ((p.llm && !c.llmUrl) || (p.whisper && !c.whisperUrl)) AI.discover('').catch(() => {});
+});
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});

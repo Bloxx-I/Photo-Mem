@@ -1,5 +1,5 @@
-const CACHE = 'photo-mem-v3';
-const ASSETS = ['./', 'index.html', 'styles.css', 'content.js', 'recall.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg'];
+const CACHE = 'photo-mem-v4';
+const ASSETS = ['./', 'index.html', 'styles.css', 'content.js', 'recall.js', 'ai.js', 'app.js', 'manifest.webmanifest', 'icons/icon.svg'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -16,7 +16,9 @@ self.addEventListener('activate', (e) => {
 // Network first, fall back to cache so updates arrive but the app works offline.
 // Only same-origin files: the AI model (CDN / Hugging Face) is cached by transformers.js itself.
 self.addEventListener('fetch', (e) => {
-  if (e.request.method !== 'GET' || new URL(e.request.url).origin !== self.location.origin) return;
+  const url = new URL(e.request.url);
+  // Skip other origins (AI model, your AI server) and the serve.py proxy.
+  if (e.request.method !== 'GET' || url.origin !== self.location.origin || url.pathname.includes('/api/')) return;
   e.respondWith(
     fetch(e.request)
       .then((res) => {

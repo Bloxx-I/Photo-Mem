@@ -410,3 +410,6 @@ button.tile { cursor: pointer; }
 .level { border-left: 4px solid var(--line); }
 .level.up { border-left-color: var(--good); background: color-mix(in srgb, var(--good) 12%, var(--surface)); }
 .level.down { border-left-color: #e0a030; background: color-mix(in srgb, #e0a030 12%, var(--surface)); }
+
+.icon-btn { background: none; border: 0; font-size: 1.25rem; cursor: pointer; padding: 4px; line-height: 1; }
+#log { white-space: pre-line; }

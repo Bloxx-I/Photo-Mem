@@ -274,9 +274,13 @@ const Recall = (() => {
         console.warn('Semantic check failed, using word matching only', err);
       }
     }
-    const points = results.reduce((s, r) => s + (r.status === 'got' || r.status === 'semantic' ? 1 : r.status === 'partial' ? 0.5 : 0), 0);
-    return { results, score: results.length ? (points / results.length) * 100 : 0, semanticUsed };
+    return { results, score: scoreOf(results), semanticUsed };
   }
 
-  return { evaluate, autoFacts, Semantic, isKeyword, stem, words, parseNumber, analyzeAttempt, altMatches };
+  function scoreOf(results) {
+    const points = results.reduce((s, r) => s + (r.status === 'got' || r.status === 'semantic' ? 1 : r.status === 'partial' ? 0.5 : 0), 0);
+    return results.length ? (points / results.length) * 100 : 0;
+  }
+
+  return { evaluate, scoreOf, autoFacts, Semantic, isKeyword, stem, words, parseNumber, analyzeAttempt, altMatches };
 })();

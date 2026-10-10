@@ -17,7 +17,10 @@
     <button class="brand" data-nav="home" aria-label="Start">
       <img src="icons/icon.svg" alt="" width="28" height="28"> Photo-Mem
     </button>
-    <div class="streak" id="streak" title="Trainingstage in Folge"></div>
+    <div class="row" style="gap:12px">
+      <div class="streak" id="streak" title="Trainingstage in Folge"></div>
+      <button class="icon-btn" data-nav="settings" aria-label="KI-Server einstellen">⚙️</button>
+    </div>
   </header>
 
   <main id="view" tabindex="-1"></main>
@@ -32,6 +35,7 @@
 
   <script src="content.js"></script>
   <script src="recall.js"></script>
+  <script src="ai.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
