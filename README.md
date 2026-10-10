@@ -8,8 +8,18 @@ Gedächtnistraining als App – nach den drei Methoden aus dem Reel *„3 ways t
 | 🗂️ | **Leitner-System** | Karteikarten in 5 Boxen (Wiederholung nach 1 / 2 / 4 / 8 / 16 Tagen). Gewusst → nächste Box, nicht gewusst → zurück in Box 1. |
 | 📝 | **Blurting** | Text lesen, verdecken, alles aufschreiben **oder diktieren** – die App zeigt, welche Kernaussagen fehlen. |
 
+**Die Schwierigkeit wächst mit dir.** Jeder Modus hat ein Level, das sich nach jeder Runde anpasst. Ziel sind etwa 75 % Erfolg – fordernd, aber machbar:
+
+| Modus | Wird schwerer bei … | Wird leichter bei … | Was sich ändert |
+|---|---|---|---|
+| 🎯 Recall-Drill | ≥ 90 % | < 55 % | abwechselnd **ein Objekt mehr** oder **20 % weniger Zeit** (Level 1: 5 Objekte / 10 s … Level 32: 20 Objekte / 10 s) |
+| 🗂️ Leitner | ≥ 90 % richtig | < 65 % richtig | **mehr neue Karten pro Tag** (4–13) und **längere Abstände** zwischen Wiederholungen |
+| 📝 Blurting | ≥ 85 % | < 50 % | **kürzere Lesezeit** (ab Level 2), ab Level 5 eine **Ablenk-Pause** vor dem Schreiben |
+
+Zwei wacklige Runden hintereinander (unter 70 %) gehen ebenfalls eine Stufe runter – so bleibt Erfolg immer erreichbar. Im Drill kannst du das Level auch selbst mit − / + setzen.
+
 **Inhalte sind schon dabei:**
-- **6 Themenpakete** fürs Leitner-System: 🧠 Gehirn & Gedächtnis · 🚀 Weltraum · 🐙 Verrückte Tierwelt · 🏛️ Geschichte · 🧪 Alltagswissenschaft · 🤯 Denkfehler. Neue Karten werden schrittweise freigeschaltet (6 pro Tag).
+- **6 Themenpakete** fürs Leitner-System: 🧠 Gehirn & Gedächtnis · 🚀 Weltraum · 🐙 Verrückte Tierwelt · 🏛️ Geschichte · 🧪 Alltagswissenschaft · 🤯 Denkfehler. Neue Karten werden schrittweise freigeschaltet – wie viele pro Tag, hängt von deinem Level ab.
 - **8 Blurting-Texte:** Vergessenskurve, Bärtierchen, Apollo 11, Placebo-Effekt, Schwarze Löcher, Gedächtnispalast, Kraken, Der Schwarze Tod.
 - Eigene Karten und Texte kannst du jederzeit ergänzen.
 

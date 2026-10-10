@@ -4,13 +4,17 @@
 
 const STORE_KEY = 'photomem:v1';
 
-const defaultData = () => ({ cards: [], texts: [], history: [], drillLevel: 'mittel', leitnerDeck: 'all', semantic: false });
+const defaultData = () => ({ cards: [], texts: [], history: [], levels: {}, leitnerDeck: 'all', semantic: false });
 
 function load() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     const d = raw ? { ...defaultData(), ...JSON.parse(raw) } : defaultData();
     d.cards.forEach((c) => { c.deck ||= 'own'; });
+    // Old fixed drill difficulty → adaptive level
+    const old = { leicht: 2, mittel: 10, schwer: 16, profi: 24 }[d.drillLevel];
+    if (old && !d.levels.drill) d.levels.drill = { level: old, recent: [] };
+    delete d.drillLevel;
     return d;
   } catch {
     return defaultData();
@@ -130,8 +134,7 @@ window.addEventListener('hashchange', route);
 /* ---------- Home ---------- */
 
 function dueCards() {
-  const today = dayStr();
-  return data.cards.filter((c) => c.due <= today);
+  return leitnerQueue().all;
 }
 
 function renderHome() {
@@ -139,12 +142,12 @@ function renderHome() {
   const trainedToday = data.history.some((h) => dayStr(h.at) === dayStr());
   view.innerHTML = `
     <h1>Trainiere dein <span class="hl">fotografisches Gedächtnis</span></h1>
-    <p class="muted">Drei Methoden – jeden Tag ein paar Minuten. ${trainedToday ? 'Heute schon trainiert ✅' : 'Heute noch nicht trainiert.'}</p>
+    <p class="muted">Drei Methoden – jeden Tag ein paar Minuten. Die Schwierigkeit wächst mit dir. ${trainedToday ? 'Heute schon trainiert ✅' : 'Heute noch nicht trainiert.'}</p>
 
     <button class="card mode-card" data-nav="drill">
       <div class="emoji">🎯</div>
       <div>
-        <h3>1 · Recall-Drill</h3>
+        <h3>1 · Recall-Drill <span class="pill">Level ${levelOf('drill')}</span></h3>
         <p class="muted small">Wie Scharfschützen trainieren: Präge dir zufällige Objekte in wenigen Sekunden ein und rufe sie danach ab.</p>
       </div>
     </button>
@@ -152,7 +155,7 @@ function renderHome() {
     <button class="card mode-card" data-nav="leitner">
       <div class="emoji">🗂️</div>
       <div>
-        <h3>2 · Leitner-System ${due ? `<span class="pill">${due} fällig</span>` : ''}</h3>
+        <h3>2 · Leitner-System <span class="pill">Level ${levelOf('leitner')}</span> ${due ? `<span class="pill">${due} fällig</span>` : ''}</h3>
         <p class="muted small">Karteikarten in 5 Boxen – mit fertigen Themenpaketen von Weltraum bis Denkfehler. Richtig → nächste Box, falsch → zurück in Box 1.</p>
       </div>
     </button>
@@ -160,11 +163,59 @@ function renderHome() {
     <button class="card mode-card" data-nav="blurt">
       <div class="emoji">📝</div>
       <div>
-        <h3>3 · Blurting</h3>
+        <h3>3 · Blurting <span class="pill">Level ${levelOf('blurt')}</span></h3>
         <p class="muted small">Spannenden Text lesen, schließen, alles aufschreiben oder diktieren – die App prüft, welche Kernaussagen fehlen.</p>
       </div>
     </button>
   `;
+}
+
+/* ---------- Adaptive difficulty ---------- */
+
+/*
+ * One staircase per mode keeps you in the "challenging but doable" zone
+ * (roughly 75 % success): clearly too easy → one level up, clearly too hard
+ * → one level down, otherwise stay. Two shaky rounds in a row also step down,
+ * so success never gets out of reach.
+ */
+const ADAPT = {
+  drill: { up: 90, down: 55, max: 32 },
+  leitner: { up: 90, down: 65, max: 10 },
+  blurt: { up: 85, down: 50, max: 8 },
+};
+
+const START_LEVEL = { drill: 1, leitner: 3, blurt: 1 };
+
+function levelOf(mode) {
+  return data.levels?.[mode]?.level || START_LEVEL[mode];
+}
+
+function setLevel(mode, level) {
+  data.levels ||= {};
+  data.levels[mode] = { level: Math.min(ADAPT[mode].max, Math.max(1, level)), recent: [] };
+  save();
+}
+
+function adapt(mode, score) {
+  const cfg = ADAPT[mode];
+  data.levels ||= {};
+  const st = (data.levels[mode] ||= { level: START_LEVEL[mode], recent: [] });
+  const prev = st.recent.at(-1);
+  let delta = 0;
+  if (score >= cfg.up) delta = 1;
+  else if (score < cfg.down) delta = -1;
+  else if (prev !== undefined && prev < 70 && score < 70) delta = -1;
+  const before = st.level;
+  st.level = Math.min(cfg.max, Math.max(1, st.level + delta));
+  st.recent = st.level === before ? [...st.recent, score].slice(-3) : [];
+  save();
+  return { before, after: st.level, delta: st.level - before };
+}
+
+function levelBanner({ before, after }, harder, easier, same) {
+  if (after > before) return `<div class="card level up">⬆️ <b>Level ${after}!</b> ${harder}</div>`;
+  if (after < before) return `<div class="card level down">🔽 <b>Level ${after}</b> – ${easier}</div>`;
+  return `<div class="card level">➡️ <b>Level ${after}</b> – ${same}</div>`;
 }
 
 /* ---------- 1. Recall-Drill ---------- */
@@ -178,52 +229,60 @@ const OBJECTS = [
   '🐵','🐔','🐧','🦉','🐢','🐍','🐙','🦀','🐟','🦋','🐝','🐞','🦒','🐘','🦓','🦔','🧪','🔭','🧯','🪴',
 ];
 
-const LEVELS = {
-  leicht: { label: 'Leicht', count: 6, seconds: 10, cols: 3 },
-  mittel: { label: 'Mittel', count: 9, seconds: 10, cols: 3 },
-  schwer: { label: 'Schwer', count: 12, seconds: 10, cols: 4 },
-  profi:  { label: 'Profi',  count: 16, seconds: 8,  cols: 4 },
-};
+/* Odd levels add an object, even levels cut the viewing time by 20 %. */
+function drillParams(level) {
+  const count = Math.min(20, 5 + Math.floor((level - 1) / 2));
+  const perItem = Math.max(0.6, 2 - 0.1 * (count - 5));
+  const seconds = Math.max(3, Math.round(count * perItem * (level % 2 === 0 ? 0.8 : 1)));
+  const cols = count <= 6 ? 3 : count <= 12 ? 4 : 5;
+  const recallCols = count * 2 <= 12 ? 4 : count * 2 <= 24 ? 5 : 6;
+  return { count, seconds, cols, recallCols };
+}
 
 function renderDrill() {
-  const lvl = LEVELS[data.drillLevel] || LEVELS.mittel;
-  const best = data.history.filter((h) => h.mode === 'drill' && h.detail?.level === data.drillLevel)
-    .reduce((m, h) => Math.max(m, h.score), 0);
+  const level = levelOf('drill');
+  const p = drillParams(level);
+  const best = data.history.filter((h) => h.mode === 'drill').reduce((m, h) => Math.max(m, h.detail?.level || 0), 0);
 
   view.innerHTML = `
     <h1>🎯 Recall-Drill</h1>
-    <p class="muted">Du siehst <b>${lvl.count} Objekte</b> für <b>${lvl.seconds} Sekunden</b>. Danach markierst du aus einer gemischten Auswahl alle, die du gesehen hast.</p>
+    <p class="muted">Präge dir die Objekte ein und markiere sie danach in einer gemischten Auswahl.</p>
     <div class="card stack">
-      <label>Schwierigkeit</label>
-      <div class="seg" id="levels">
-        ${Object.entries(LEVELS).map(([k, v]) => `<button data-level="${k}" class="${k === data.drillLevel ? 'on' : ''}">${v.label}</button>`).join('')}
+      <div class="row between">
+        <div><span class="muted small">Dein Level</span><div class="big-num">${level}</div></div>
+        <div class="right">
+          <b>${p.count} Objekte</b><br><span class="muted">${p.seconds} Sekunden</span>
+        </div>
       </div>
-      <p class="muted small">Bestwert auf dieser Stufe: <b>${best}%</b></p>
+      <p class="muted small" style="margin:0">Die Schwierigkeit passt sich an: ab 90 % geht's hoch (mehr Objekte oder weniger Zeit), unter 55 % wieder runter. ${best ? `Höchstes Level bisher: <b>${best}</b>.` : ''}</p>
       <button class="btn primary block" id="start">Los geht's</button>
+      <div class="row between">
+        <span class="muted small">Level selbst wählen</span>
+        <div class="row" style="gap:6px">
+          <button class="btn ghost small-btn" id="minus" aria-label="Leichter" ${level <= 1 ? 'disabled' : ''}>−</button>
+          <button class="btn ghost small-btn" id="plus" aria-label="Schwerer" ${level >= ADAPT.drill.max ? 'disabled' : ''}>+</button>
+        </div>
+      </div>
     </div>
     <p class="muted small">Tipp: Verknüpfe die Objekte zu einer kleinen Geschichte oder lege sie gedanklich in Räume deiner Wohnung.</p>
   `;
 
-  $('#levels').addEventListener('click', (e) => {
-    const b = e.target.closest('[data-level]');
-    if (!b) return;
-    data.drillLevel = b.dataset.level;
-    save();
-    renderDrill();
-  });
-  $('#start').addEventListener('click', () => drillMemorize(data.drillLevel));
+  $('#minus').addEventListener('click', () => { setLevel('drill', level - 1); renderDrill(); });
+  $('#plus').addEventListener('click', () => { setLevel('drill', level + 1); renderDrill(); });
+  $('#start').addEventListener('click', () => drillMemorize());
 }
 
-function drillMemorize(levelKey) {
-  const lvl = LEVELS[levelKey];
+function drillMemorize() {
+  const level = levelOf('drill');
+  const p = drillParams(level);
   const pool = shuffle(OBJECTS);
-  const shown = pool.slice(0, lvl.count);
-  const distractors = pool.slice(lvl.count, lvl.count * 2);
+  const shown = pool.slice(0, p.count);
+  const distractors = pool.slice(p.count, p.count * 2);
 
   view.innerHTML = `
-    <div class="row between"><h1>Einprägen</h1><span class="big-num" id="secs">${lvl.seconds}</span></div>
+    <div class="row between"><h1>Einprägen <span class="pill">Level ${level}</span></h1><span class="big-num" id="secs">${p.seconds}</span></div>
     <div class="timer"><div id="bar"></div></div>
-    <div class="grid" style="--cols:${lvl.cols}">
+    <div class="grid" style="--cols:${p.cols}">
       ${shown.map((o) => `<div class="tile">${o}</div>`).join('')}
     </div>
     <p></p>
@@ -231,7 +290,7 @@ function drillMemorize(levelKey) {
   `;
 
   const start = performance.now();
-  const total = lvl.seconds * 1000;
+  const total = p.seconds * 1000;
   let raf;
   const tick = (now) => {
     const left = Math.max(0, total - (now - start));
@@ -243,23 +302,22 @@ function drillMemorize(levelKey) {
   const done = () => {
     cancelAnimationFrame(raf);
     cleanup = null;
-    drillRecall(levelKey, shown, distractors);
+    drillRecall(level, shown, distractors);
   };
   raf = requestAnimationFrame(tick);
   cleanup = () => cancelAnimationFrame(raf);
   $('#skip').addEventListener('click', done);
 }
 
-function drillRecall(levelKey, shown, distractors) {
-  const lvl = LEVELS[levelKey];
+function drillRecall(level, shown, distractors) {
+  const p = drillParams(level);
   const options = shuffle([...shown, ...distractors]);
   const picked = new Set();
-  const cols = lvl.count * 2 > 16 ? 6 : 4;
 
   view.innerHTML = `
     <h1>Was hast du gesehen?</h1>
-    <p class="muted">Markiere genau die <b>${lvl.count}</b> Objekte von eben. <span id="count">0</span>/${lvl.count} gewählt.</p>
-    <div class="grid" style="--cols:${cols}" id="opts">
+    <p class="muted">Markiere genau die <b>${p.count}</b> Objekte von eben. <span id="count">0</span>/${p.count} gewählt.</p>
+    <div class="grid" style="--cols:${p.recallCols}" id="opts">
       ${options.map((o, i) => `<button class="tile" data-i="${i}" aria-pressed="false">${o}</button>`).join('')}
     </div>
     <p></p>
@@ -280,22 +338,28 @@ function drillRecall(levelKey, shown, distractors) {
     const shownSet = new Set(shown);
     const hits = [...picked].filter((o) => shownSet.has(o)).length;
     const wrong = picked.size - hits;
-    const score = Math.max(0, (hits - wrong) / lvl.count) * 100;
-    logSession('drill', score, { level: levelKey, hits, wrong, count: lvl.count });
+    const score = Math.max(0, (hits - wrong) / p.count) * 100;
+    logSession('drill', score, { level, hits, wrong, count: p.count });
+    const change = adapt('drill', score);
+    const next = drillParams(change.after);
+    const what = next.count > p.count
+      ? `Nächste Runde: <b>${next.count} Objekte</b> (${next.seconds} s).`
+      : `Nächste Runde: nur noch <b>${next.seconds} s</b> statt ${p.seconds} s für ${next.count} Objekte.`;
 
     view.innerHTML = `
       <h1>${score >= 90 ? 'Stark! 🧠' : score >= 60 ? 'Gut gemacht 👍' : 'Weiter üben 💪'}</h1>
       <div class="card">
         <div class="kpis">
           <div class="kpi"><b>${Math.round(score)}%</b><small>Score</small></div>
-          <div class="kpi"><b>${hits}/${lvl.count}</b><small>Treffer</small></div>
+          <div class="kpi"><b>${hits}/${p.count}</b><small>Treffer</small></div>
           <div class="kpi"><b>${wrong}</b><small>Falsch</small></div>
         </div>
       </div>
+      ${levelBanner(change, what, `etwas leichter: ${next.count} Objekte, ${next.seconds} s.`, 'genau richtig gefordert. Ab 90 % geht\'s hoch.')}
       <div class="legend">
         <span class="l-got">richtig</span><span class="l-missed">falsch gewählt</span><span>gestrichelt = übersehen</span>
       </div>
-      <div class="grid" style="--cols:${cols}">
+      <div class="grid" style="--cols:${p.recallCols}">
         ${options.map((o) => {
           const cls = shownSet.has(o) ? (picked.has(o) ? 'hit' : 'miss') : (picked.has(o) ? 'wrong' : 'dim');
           return `<div class="tile ${cls}">${o}</div>`;
@@ -303,20 +367,44 @@ function drillRecall(levelKey, shown, distractors) {
       </div>
       <p></p>
       <div class="row">
-        <button class="btn primary" id="again">Nochmal</button>
-        <button class="btn" id="back">Stufe ändern</button>
+        <button class="btn primary" id="again">Nächste Runde</button>
+        <button class="btn" id="back">Übersicht</button>
       </div>
     `;
-    $('#again').addEventListener('click', () => drillMemorize(levelKey));
+    $('#again').addEventListener('click', () => drillMemorize());
     $('#back').addEventListener('click', renderDrill);
   });
 }
 
 /* ---------- 2. Leitner-System ---------- */
 
-const BOX_INTERVALS = [1, 2, 4, 8, 16]; // days until next review, for boxes 1–5
-const BOX_LABELS = ['täglich', 'alle 2 T.', 'alle 4 T.', 'alle 8 T.', 'alle 16 T.'];
-const NEW_PER_DAY = 6; // a new pack is released gradually instead of all at once
+const BOX_INTERVALS = [1, 2, 4, 8, 16]; // base days until next review, for boxes 1–5
+
+/* Higher level = more new cards per day and longer gaps between reviews. */
+function leitnerParams(level = levelOf('leitner')) {
+  const ease = 1 + 0.1 * (level - 1);
+  return {
+    newPerDay: 3 + level,
+    intervals: BOX_INTERVALS.map((d, i) => (i === 0 ? 1 : Math.max(2, Math.round(d * ease)))),
+  };
+}
+
+function boxLabel(days) {
+  return days === 1 ? 'täglich' : `alle ${days} T.`;
+}
+
+function newLeft() {
+  const t = data.newToday;
+  return Math.max(0, leitnerParams().newPerDay - (t?.day === dayStr() ? t.n : 0));
+}
+
+/* Today's session: due reviews plus as many new cards as today's budget allows. */
+function leitnerQueue(inDeck = () => true) {
+  const today = dayStr();
+  const reviews = data.cards.filter((c) => !c.isNew && c.due <= today && inDeck(c));
+  const fresh = data.cards.filter((c) => c.isNew && inDeck(c)).slice(0, newLeft());
+  return { reviews, fresh, all: [...shuffle(reviews), ...fresh] };
+}
 
 const OWN_DECKS = {
   own: { emoji: '✍️', title: 'Eigene Karten' },
@@ -327,17 +415,17 @@ function deckInfo(id) {
   return DECKS.find((d) => d.id === id) || OWN_DECKS[id] || OWN_DECKS.own;
 }
 
-function addCard(front, back, deck = 'own', due = dayStr()) {
+function addCard(front, back, deck = 'own', isNew = false) {
   front = front.trim();
   back = back.trim();
   if (!front || !back) return false;
   if (data.cards.some((c) => c.front === front && c.deck === deck)) return false;
-  data.cards.push({ id: uid(), front, back, box: 1, due, deck });
+  data.cards.push({ id: uid(), front, back, box: 1, due: dayStr(), deck, ...(isNew && { isNew: true }) });
   return true;
 }
 
 function addPack(deck) {
-  shuffle(deck.cards).forEach(([front, back], i) => addCard(front, back, deck.id, addDays(Math.floor(i / NEW_PER_DAY))));
+  shuffle(deck.cards).forEach(([front, back]) => addCard(front, back, deck.id, true));
   save();
 }
 
@@ -345,7 +433,9 @@ function renderLeitner() {
   const filter = data.leitnerDeck || 'all';
   const inDeck = (c) => filter === 'all' || c.deck === filter;
   const cards = data.cards.filter(inDeck);
-  const due = dueCards().filter(inDeck);
+  const q = leitnerQueue(inDeck);
+  const due = q.all;
+  const lp = leitnerParams();
   const counts = [1, 2, 3, 4, 5].map((b) => cards.filter((c) => c.box === b).length);
   const usedDecks = [...new Set(data.cards.map((c) => c.deck || 'own'))];
 
@@ -360,15 +450,16 @@ function renderLeitner() {
       </div>` : ''}
 
     <div class="boxes">
-      ${counts.map((n, i) => `<div class="box"><small>Box ${i + 1}</small><b>${n}</b><small>${BOX_LABELS[i]}</small></div>`).join('')}
+      ${counts.map((n, i) => `<div class="box"><small>Box ${i + 1}</small><b>${n}</b><small>${boxLabel(lp.intervals[i])}</small></div>`).join('')}
     </div>
+    <p class="muted small" style="margin:-4px 0 12px">Level ${levelOf('leitner')} · ${lp.newPerDay} neue Karten pro Tag${q.fresh.length ? ` · heute ${q.reviews.length} Wiederholungen + ${q.fresh.length} neue` : ''}</p>
 
     <button class="btn primary block" id="learn" ${due.length ? '' : 'disabled'}>
       ${due.length ? `${due.length} Karte${due.length === 1 ? '' : 'n'} lernen` : data.cards.length ? 'Heute nichts fällig 🎉' : 'Wähle unten ein Themenpaket'}
     </button>
 
     <h2>Themenpakete</h2>
-    <p class="muted small">Neue Pakete werden schrittweise freigeschaltet – ${NEW_PER_DAY} neue Karten pro Tag.</p>
+    <p class="muted small">Neue Karten kommen schrittweise dazu. Wie viele pro Tag, passt sich deinem Lernerfolg an.</p>
     <div class="card" id="packs">
       ${DECKS.map((d) => {
         const n = data.cards.filter((c) => c.deck === d.id).length;
@@ -412,7 +503,7 @@ function renderLeitner() {
     </details>
   `;
 
-  $('#learn').addEventListener('click', () => leitnerSession(shuffle(due)));
+  $('#learn').addEventListener('click', () => leitnerSession(due));
 
   $('#filter')?.addEventListener('click', (e) => {
     const b = e.target.closest('[data-deck]');
@@ -478,7 +569,7 @@ function leitnerSession(queue) {
     const c = queue[i];
     const d = deckInfo(c.deck);
     view.innerHTML = `
-      <div class="row between"><h1>Karte ${i + 1}/${queue.length}</h1><span class="pill">Box ${c.box}</span></div>
+      <div class="row between"><h1>Karte ${i + 1}/${queue.length}</h1><span class="pill">${c.isNew ? '✨ Neu' : `Box ${c.box}`}</span></div>
       <p class="muted small">${d.emoji} ${esc(d.title)}</p>
       <div class="card flash" id="flash">
         <div>${esc(c.front)}</div>
@@ -501,8 +592,13 @@ function leitnerSession(queue) {
   const answer = (ok) => {
     const card = data.cards.find((c) => c.id === queue[i].id);
     if (card) {
+      if (card.isNew) {
+        delete card.isNew;
+        const t = data.newToday?.day === dayStr() ? data.newToday : { day: dayStr(), n: 0 };
+        data.newToday = { day: t.day, n: t.n + 1 };
+      }
       card.box = ok ? Math.min(5, card.box + 1) : 1;
-      card.due = addDays(BOX_INTERVALS[card.box - 1]);
+      card.due = addDays(leitnerParams().intervals[card.box - 1]);
       save();
     }
     if (ok) right++;
@@ -513,6 +609,16 @@ function leitnerSession(queue) {
   const finish = () => {
     const score = queue.length ? (right / queue.length) * 100 : 0;
     logSession('leitner', score, { right, total: queue.length });
+    // Tiny sessions say little about your level, so only adapt from 4 cards on.
+    let banner = '';
+    if (queue.length >= 4) {
+      const change = adapt('leitner', score);
+      const np = leitnerParams(change.after);
+      banner = levelBanner(change,
+        `Du sitzt sicher – ab jetzt <b>${np.newPerDay} neue Karten</b> pro Tag und längere Abstände zwischen den Wiederholungen.`,
+        `etwas ruhiger: ${np.newPerDay} neue Karten pro Tag und kürzere Abstände, damit's wieder sitzt.`,
+        'gutes Tempo. Ab 90 % richtig gibt\'s mehr neue Karten.');
+    }
     view.innerHTML = `
       <h1>Fertig für heute ✅</h1>
       <div class="card">
@@ -522,6 +628,7 @@ function leitnerSession(queue) {
           <div class="kpi"><b>${queue.length - right}</b><small>zurück in Box 1</small></div>
         </div>
       </div>
+      ${banner}
       <button class="btn primary block" data-nav="leitner">Zur Übersicht</button>
     `;
   };
@@ -540,8 +647,37 @@ function blurtTexts() {
   ];
 }
 
+/* Suggest the topic you've practised least or scored lowest on. */
+function suggestText(exceptKey) {
+  const list = blurtTexts().filter((t) => t.key !== exceptKey);
+  const rank = (t) => lastBlurt(t.key)?.score ?? -1;
+  return list.sort((a, b) => rank(a) - rank(b))[0] || blurtTexts()[0];
+}
+
 function lastBlurt(key) {
   return data.history.filter((h) => h.mode === 'blurt' && h.detail?.textId === key).pop();
+}
+
+/*
+ * Level 1: read as long as you like. From level 2 the text hides itself after a
+ * reading time that shrinks per level; from level 5 a short distraction task
+ * sits between reading and writing, so you recall from memory, not from echo.
+ */
+const SECONDS_PER_WORD = [null, null, 0.75, 0.6, 0.5, 0.42, 0.36, 0.3, 0.26];
+
+function blurtParams(level = levelOf('blurt')) {
+  return { spw: SECONDS_PER_WORD[level], pause: level >= 7 ? 25 : level >= 5 ? 15 : 0 };
+}
+
+function readSeconds(text, p = blurtParams()) {
+  return p.spw ? Math.max(15, Math.round(Recall.words(text.body).length * p.spw)) : null;
+}
+
+function blurtLevelText(level = levelOf('blurt')) {
+  const p = blurtParams(level);
+  if (!p.spw) return 'Lesen ohne Zeitlimit.';
+  const per100 = Math.round(p.spw * 100);
+  return `Lesezeit ca. ${per100} s pro 100 Wörter${p.pause ? ` + ${p.pause} s Ablenkung vor dem Schreiben` : ''}.`;
 }
 
 function semanticStatus() {
@@ -570,6 +706,11 @@ function renderBlurt() {
   view.innerHTML = `
     <h1>📝 Blurting</h1>
     <p class="muted">Lies einen Text, verdecke ihn und schreib oder <b>diktiere</b> alles, was du noch weißt. Die App prüft, welche Kernaussagen du erinnert hast – auch wenn du andere Worte benutzt.</p>
+
+    <div class="card row" style="flex-wrap:nowrap">
+      <div class="big-num" style="min-width:2ch;text-align:center">${levelOf('blurt')}</div>
+      <div><h3>Dein Level</h3><p class="muted small" style="margin:0">${blurtLevelText()} Ab 85 % wird es schwerer, unter 50 % leichter.</p></div>
+    </div>
 
     <div class="card">
       <div class="row between" style="flex-wrap:nowrap">
@@ -635,25 +776,59 @@ function blurtRead(text) {
   if (cleanup) { cleanup(); cleanup = null; }
   // Warm up the model while the user is reading.
   if (data.semantic) Recall.Semantic.load().catch(() => {});
+  const p = blurtParams();
+  const limit = readSeconds(text, p);
   view.innerHTML = `
-    <div class="row between"><h1>Lesen</h1><span class="pill" id="clock">0:00</span></div>
-    <p class="muted">Schritt 1/3 – Lies aufmerksam. Danach wird der Text verdeckt.</p>
+    <div class="row between"><h1>Lesen <span class="pill">Level ${levelOf('blurt')}</span></h1><span class="pill" id="clock">${limit ? fmtTime(limit) : '0:00'}</span></div>
+    ${limit ? '<div class="timer"><div id="bar"></div></div>' : ''}
+    <p class="muted">Schritt 1/3 – ${limit ? `Du hast <b>${limit} Sekunden</b>, dann wird der Text verdeckt.` : 'Lies aufmerksam. Danach wird der Text verdeckt.'}</p>
     <div class="card"><h3>${text.emoji} ${esc(text.title)}</h3><div class="source-text">${esc(text.body)}</div></div>
-    <button class="btn primary block" id="hide">Text schließen & aufschreiben</button>
+    <button class="btn primary block" id="hide">${limit ? 'Fertig gelesen' : 'Text schließen & aufschreiben'}</button>
   `;
   window.scrollTo(0, 0);
   const t0 = Date.now();
   const iv = setInterval(() => {
-    const s = Math.floor((Date.now() - t0) / 1000);
+    const s = (Date.now() - t0) / 1000;
     const el = $('#clock');
-    if (el) el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-  }, 1000);
-  cleanup = () => clearInterval(iv);
-  $('#hide').addEventListener('click', () => {
+    if (!el) return;
+    if (!limit) { el.textContent = fmtTime(Math.floor(s)); return; }
+    el.textContent = fmtTime(Math.max(0, Math.ceil(limit - s)));
+    $('#bar').style.transform = `scaleX(${Math.max(0, 1 - s / limit)})`;
+    if (s >= limit) next();
+  }, 250);
+  const next = () => {
     clearInterval(iv);
     cleanup = null;
-    blurtWrite(text);
-  });
+    p.pause ? blurtPause(text, p.pause) : blurtWrite(text);
+  };
+  cleanup = () => clearInterval(iv);
+  $('#hide').addEventListener('click', next);
+}
+
+function fmtTime(sec) {
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
+
+/* Distraction task: blocks rehearsal, so writing has to come from memory. */
+function blurtPause(text, seconds) {
+  const from = 80 + Math.floor(Math.random() * 40);
+  view.innerHTML = `
+    <div class="row between"><h1>Kurze Ablenkung 🧩</h1><span class="big-num" id="secs">${seconds}</span></div>
+    <div class="timer"><div id="bar"></div></div>
+    <div class="card center">
+      <p>Zähle laut oder im Kopf in <b>3er-Schritten rückwärts</b>:</p>
+      <div class="big-num">${from} → ${from - 3} → …</div>
+    </div>
+    <p class="muted small center">Nicht an den Text denken – danach geht's ans Aufschreiben.</p>
+  `;
+  const t0 = Date.now();
+  const iv = setInterval(() => {
+    const s = (Date.now() - t0) / 1000;
+    $('#secs').textContent = Math.max(0, Math.ceil(seconds - s));
+    $('#bar').style.transform = `scaleX(${Math.max(0, 1 - s / seconds)})`;
+    if (s >= seconds) { clearInterval(iv); cleanup = null; blurtWrite(text); }
+  }, 250);
+  cleanup = () => clearInterval(iv);
 }
 
 function blurtWrite(text) {
@@ -760,7 +935,13 @@ async function blurtResult(text, attempt) {
   if (location.hash.slice(1) !== 'blurt' && location.hash) return; // user navigated away meanwhile
 
   const { results, score } = res;
-  logSession('blurt', score, { textId: text.key, got: results.filter((r) => r.status !== 'missed').length, total: results.length });
+  const level = levelOf('blurt');
+  logSession('blurt', score, { textId: text.key, level, got: results.filter((r) => r.status !== 'missed').length, total: results.length });
+  const change = adapt('blurt', score);
+  const banner = levelBanner(change,
+    `Nächstes Mal: ${blurtLevelText(change.after)}`,
+    `etwas leichter: ${blurtLevelText(change.after)}`,
+    'gute Herausforderung. Ab 85 % geht\'s eine Stufe hoch.');
   const toLearn = results.filter((r) => r.status === 'missed' || r.status === 'partial');
   const n = (s) => results.filter((r) => r.status === s).length;
 
@@ -773,6 +954,7 @@ async function blurtResult(text, attempt) {
       <div class="meter"><div style="width:${score}%"></div></div>
       ${useSemantic && !res.semanticUsed ? '<p class="muted small" style="margin:8px 0 0">⚠️ KI-Abgleich nicht verfügbar – nur Wortabgleich.</p>' : ''}
     </div>
+    ${banner}
 
     <div class="card facts">
       ${results.map((r) => {
@@ -788,12 +970,14 @@ async function blurtResult(text, attempt) {
     <div class="stack">
       ${toLearn.length ? `<button class="btn block" id="cards">🗂️ ${toLearn.length} Lücke${toLearn.length === 1 ? '' : 'n'} als Leitner-Karte${toLearn.length === 1 ? '' : 'n'} anlegen</button>` : ''}
       <button class="btn primary block" id="again">Nochmal lesen & wiederholen</button>
+      <button class="btn block" id="nextText">Nächstes Thema</button>
       <button class="btn ghost block" data-nav="blurt">Zur Übersicht</button>
     </div>
   `;
   window.scrollTo(0, 0);
 
   $('#again').addEventListener('click', () => blurtRead(text));
+  $('#nextText').addEventListener('click', () => blurtRead(suggestText(text.key)));
   $('#cards')?.addEventListener('click', (e) => {
     const added = toLearn.map(gapCard).filter((c) => addCard(c.front, c.back, 'blurt')).length;
     save();
@@ -838,7 +1022,7 @@ function renderStats() {
       const recent = list.slice(-10);
       return `
         <div class="card">
-          <div class="row between"><h3>${label}</h3><span class="muted small">${list.length} ${list.length === 1 ? 'Einheit' : 'Einheiten'}</span></div>
+          <div class="row between"><h3>${label} <span class="pill">Level ${levelOf(k)}</span></h3><span class="muted small">${list.length} ${list.length === 1 ? 'Einheit' : 'Einheiten'}</span></div>
           <p class="muted small" style="margin:0">Ø letzte 10: <b>${avg(recent)}%</b> · Bestwert: <b>${list.reduce((m, x) => Math.max(m, x.score), 0)}%</b></p>
         </div>`;
     }).join('')}

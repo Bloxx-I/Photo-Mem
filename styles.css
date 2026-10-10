@@ -404,3 +404,9 @@ button.tile { cursor: pointer; }
 .fact.missed .ficon { background: var(--bad); }
 .fact.missed > span:last-child { font-weight: 600; }
 .legend .l-partial::before { background: #e0a030; }
+
+/* Level feedback */
+.right { text-align: right; }
+.level { border-left: 4px solid var(--line); }
+.level.up { border-left-color: var(--good); background: color-mix(in srgb, var(--good) 12%, var(--surface)); }
+.level.down { border-left-color: #e0a030; background: color-mix(in srgb, #e0a030 12%, var(--surface)); }
