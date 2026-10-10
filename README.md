@@ -63,6 +63,8 @@ Benötigt `python3` und `curl`. Danach:
 ```bash
 photo-mem            # App starten (öffnet http://localhost:8765)
 photo-mem stop       # Server beenden
+photo-mem lan        # im Heimnetz freigeben und Adresse fürs Handy anzeigen
+photo-mem info       # Adressen und gefundene KI-Dienste anzeigen
 photo-mem update     # neueste Version installieren
 photo-mem uninstall  # deinstallieren
 ```
@@ -87,19 +89,29 @@ Photo-Mem spricht mit jedem **OpenAI-kompatiblen LLM-Server** (Ollama, llama.cpp
 
 So spricht der Browser nur mit einer Adresse – Photo-Mem leitet LLM- und Whisper-Anfragen intern weiter (`serve.py`, nur Python nötig). Dadurch gibt es keine CORS- oder HTTPS-Probleme.
 
-Auf dem Server (Adressen an deine Dienste anpassen):
+Auf dem KI-Server (dort, wo LLM und Whisper laufen) im Terminal:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Bloxx-I/Photo-Mem/HEAD/install.sh | \
-  PHOTO_MEM_LLM_URL=http://localhost:11434 \
-  PHOTO_MEM_WHISPER_URL=http://localhost:8000 \
-  PHOTO_MEM_BIND=0.0.0.0 sh
-photo-mem
+curl -fsSL https://raw.githubusercontent.com/Bloxx-I/Photo-Mem/HEAD/install.sh | sh
+photo-mem lan
 ```
 
-Dann im Browser `http://<server-ip>:8765` öffnen – LLM und Whisper werden automatisch erkannt (⚙️ oben rechts zeigt den Status). Einstellungen ändern: `photo-mem config` zeigt die Datei, danach `photo-mem stop && photo-mem`.
+Du musst weder IP noch Ports kennen: Photo-Mem sucht LLM und Whisper auf dem Server selbst und zeigt dir an, unter welcher Adresse du die App öffnen kannst:
 
-Typische Ports: Ollama `11434`, llama.cpp `8080`, LM Studio `1234`, vLLM `8000`, speaches/faster-whisper `8000`, whisper-asr-webservice `9000`, whisper.cpp `8080`.
+```
+Photo-Mem läuft:  http://localhost:8765/
+Auf Handy/PC im selben Netz öffnen:
+  http://192.168.178.42:8765/
+  http://r9700.local:8765/   (Name statt IP, klappt meist auch)
+LLM:     http://127.0.0.1:11434
+Whisper: http://127.0.0.1:8000
+```
+
+Diese Adresse am Handy oder PC öffnen – fertig. Die Adressen siehst du jederzeit wieder mit `photo-mem info`.
+
+Weitere Befehle: `photo-mem local` (nur noch auf dem Server selbst erreichbar), `photo-mem config` (Einstellungen anzeigen). Wird ein Dienst nicht gefunden, trag ihn in der Config ein, z. B. `PHOTO_MEM_LLM_URL="http://localhost:11434"`, und starte neu mit `photo-mem stop && photo-mem`.
+
+Gesucht wird auf den typischen Ports: Ollama `11434`, llama.cpp `8080`, LM Studio `1234`, vLLM `8000`, speaches/faster-whisper `8000`, whisper-asr-webservice `9000`, whisper.cpp `8080`.
 
 **Mikrofon am Handy braucht HTTPS.** Browser erlauben das Mikrofon nur über `https://` oder `localhost`. Am einfachsten mit [Tailscale](https://tailscale.com):
 

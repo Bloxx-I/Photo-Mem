@@ -6,9 +6,8 @@
 # Installs the app to ~/.local/share/photo-mem and adds the command `photo-mem`
 # (start the app), `photo-mem update` and `photo-mem uninstall`.
 #
-# On your AI server, pass the LLM / Whisper addresses so the app proxies them:
-#   curl -fsSL …/install.sh | PHOTO_MEM_LLM_URL=http://localhost:11434 \
-#     PHOTO_MEM_WHISPER_URL=http://localhost:8000 PHOTO_MEM_BIND=0.0.0.0 sh
+# On your AI server, run it there and then `photo-mem lan`: LLM and Whisper on
+# the same machine are found automatically and the network address is printed.
 set -eu
 
 REPO="Bloxx-I/Photo-Mem"
@@ -64,8 +63,8 @@ if [ ! -f "$CONFIG" ] || [ -n "${PHOTO_MEM_LLM_URL:-}${PHOTO_MEM_WHISPER_URL:-}$
 # Photo-Mem settings – edit and run: photo-mem stop && photo-mem
 PHOTO_MEM_PORT="${PHOTO_MEM_PORT:-$PORT}"
 PHOTO_MEM_BIND="${PHOTO_MEM_BIND:-127.0.0.1}"      # 0.0.0.0 = reachable from phone/LAN
-PHOTO_MEM_LLM_URL="${PHOTO_MEM_LLM_URL:-}"         # e.g. http://localhost:11434 (Ollama)
-PHOTO_MEM_WHISPER_URL="${PHOTO_MEM_WHISPER_URL:-}" # e.g. http://localhost:8000
+PHOTO_MEM_LLM_URL="${PHOTO_MEM_LLM_URL:-}"         # empty = find automatically, or e.g. http://localhost:11434, or off
+PHOTO_MEM_WHISPER_URL="${PHOTO_MEM_WHISPER_URL:-}" # empty = find automatically, or e.g. http://localhost:8000, or off
 PHOTO_MEM_TLS_CERT="${PHOTO_MEM_TLS_CERT:-}"       # optional HTTPS (needed for the mic on phones)
 PHOTO_MEM_TLS_KEY="${PHOTO_MEM_TLS_KEY:-}"
 CONF
@@ -88,17 +87,27 @@ case "\${1:-start}" in
     [ -f "\$PREFIX/server.pid" ] && kill "\$(cat "\$PREFIX/server.pid")" 2>/dev/null
     rm -f "\$PREFIX/server.pid"; echo "Photo-Mem gestoppt."; exit 0 ;;
   config) echo "Einstellungen: \$PREFIX/config"; cat "\$PREFIX/config"; exit 0 ;;
+  lan)
+    # Make the app reachable from phone/PC in the same network.
+    sed -i.bak 's/^PHOTO_MEM_BIND=.*/PHOTO_MEM_BIND="0.0.0.0"      # 0.0.0.0 = reachable from phone\/LAN/' "\$PREFIX/config" && rm -f "\$PREFIX/config.bak"
+    "\$0" stop >/dev/null; exec "\$0" ;;
+  local)
+    sed -i.bak 's/^PHOTO_MEM_BIND=.*/PHOTO_MEM_BIND="127.0.0.1"    # 0.0.0.0 = reachable from phone\/LAN/' "\$PREFIX/config" && rm -f "\$PREFIX/config.bak"
+    "\$0" stop >/dev/null; exec "\$0" ;;
+  info) cat "\$PREFIX/server.log" 2>/dev/null || echo "Läuft nicht."; exit 0 ;;
   start) ;;
-  *) echo "Verwendung: photo-mem [start|stop|config|update|uninstall]"; exit 1 ;;
+  *) echo "Verwendung: photo-mem [start|stop|lan|local|info|config|update|uninstall]"; exit 1 ;;
 esac
 
 if ! { [ -f "\$PREFIX/server.pid" ] && kill -0 "\$(cat "\$PREFIX/server.pid")" 2>/dev/null; }; then
   nohup python3 "\$PREFIX/app/serve.py" --port "\$PORT" >"\$PREFIX/server.log" 2>&1 &
   echo \$! >"\$PREFIX/server.pid"
-  sleep 1
+  # Wait until the server has searched for LLM/Whisper and printed its addresses.
+  i=0; while [ \$i -lt 40 ] && ! grep -q "^Whisper:" "\$PREFIX/server.log" 2>/dev/null; do sleep 0.5; i=\$((i+1)); done
 fi
 
-echo "Photo-Mem läuft auf \$URL  (beenden: photo-mem stop)"
+cat "\$PREFIX/server.log"
+echo "(beenden: photo-mem stop · fürs Handy: photo-mem lan)"
 if command -v open >/dev/null 2>&1; then open "\$URL"
 elif command -v xdg-open >/dev/null 2>&1; then xdg-open "\$URL" >/dev/null 2>&1
 fi
@@ -126,5 +135,6 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) say "Hinweis: $BIN_DIR ist nicht im PATH. Füge zu ~/.zshrc bzw. ~/.bashrc hinzu:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
+say "Auf dem KI-Server fürs Handy freigeben: photo-mem lan"
 say "Einstellungen (KI-Server, Port, HTTPS): photo-mem config"
 say "Deinstallieren: photo-mem uninstall"
